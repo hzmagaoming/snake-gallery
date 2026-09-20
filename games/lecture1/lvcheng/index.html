@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>贪吃蛇 · 奇趣版</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#0a0a12; overflow:hidden; }
+  body { display:flex; align-items:center; justify-content:center; }
+  #wrap { line-height:0; }
+  canvas { outline:none; display:block; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" width="768" height="628" tabindex="0"></canvas></div>
+<script>
+"use strict";
+/* ══════════════════════════════════════════════════════
+   贪吃蛇 · 奇趣版  (pygame → HTML5 Canvas 移植)
+   原作者: 吕程
+   ══════════════════════════════════════════════════════ */
+
+// ───── 画面参数 ─────
+const CELL = 24, COLS = 32, ROWS = 24;
+const MAP_W = CELL * COLS, MAP_H = CELL * ROWS;
+const PANEL_H = 52;
+const WIN_W = MAP_W, WIN_H = MAP_H + PANEL_H;
+
+// ───── 配色 ─────
+const BG_COLOR   = [10, 10, 18];
+const GRID_COLOR = [22, 22, 30];
+const PANEL_BG   = [14, 14, 24];
+const BORDER_CLR = [40, 40, 60];
+const HEAD_COLOR = [0, 230, 100];
+const TAIL_COLOR = [0, 120, 50];
+const FOOD_RED   = [230, 55, 55];
+const FOOD_GOLD  = [255, 200, 0];
+const FOOD_PURP  = [150, 50, 220];
+const FOOD_BLUE  = [50, 190, 255];
+const PORTAL_A   = [255, 100, 210];
+const PORTAL_B   = [100, 210, 255];
+const WHITE      = [240, 240, 240];
+const GRAY       = [130, 130, 140];
+const GREEN      = [0, 220, 100];
+
+const css = (c, a) => a === undefined
+  ? `rgb(${c[0]},${c[1]},${c[2]})`
+  : `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
+// ───── 方向 ─────
+const UP = [0, -1], DOWN = [0, 1], LEFT = [-1, 0], RIGHT = [1, 0];
+const KEY_DIR = {
+  ArrowUp: UP, KeyW: UP,
+  ArrowDown: DOWN, KeyS: DOWN,
+  ArrowLeft: LEFT, KeyA: LEFT,
+  ArrowRight: RIGHT, KeyD: RIGHT,
+};
+const isOpposite = (a, b) => a[0] === -b[0] && a[1] === -b[1];
+
+const FONT = '"PingFang SC","Microsoft YaHei","SimHei","Noto Sans SC",sans-serif';
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+// ══════════════════ 粒子 ══════════════════
+class Particle {
+  constructor(x, y, color) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 1.5 + Math.random() * 3.5;
+    this.x = x; this.y = y;
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed - 1.5;
+    this.color = color;
+    this.life = 0.4 + Math.random() * 0.6;
+    this.maxLife = this.life;
+    this.radius = 2 + Math.random() * 3;
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.vy += 0.08;
+    this.life -= 1 / 60;
+  }
+  draw() {
+    if (this.life <= 0) return;
+    const alpha = this.life / this.maxLife;
+    const c = this.color.map(v => Math.floor(v * alpha));
+    const r = Math.max(1, Math.floor(this.radius * alpha));
+    ctx.fillStyle = css(c);
+    ctx.beginPath();
+    ctx.arc(Math.floor(this.x), Math.floor(this.y), r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  get alive() { return this.life > 0; }
+}
+
+// ══════════════════ 主游戏 ══════════════════
+let snake, dir, bufDir, score, alive, paused, grow;
+let combo, comboCd, boost, portal, portalCd, foods, particles, frame, shake;
+
+function randCell(extraBan) {
+  const banned = new Set(snake.map(p => p[0] + "," + p[1]));
+  if (extraBan) for (const p of extraBan) banned.add(p[0] + "," + p[1]);
+  for (const f of foods) banned.add(f.pos[0] + "," + f.pos[1]);
+  if (portal) {
+    banned.add(portal.a[0] + "," + portal.a[1]);
+    banned.add(portal.b[0] + "," + portal.b[1]);
+  }
+  for (let i = 0; i < 999; i++) {
+    const p = [Math.floor(Math.random() * COLS), Math.floor(Math.random() * ROWS)];
+    if (!banned.has(p[0] + "," + p[1])) return p;
+  }
+  return [0, 0];
+}
+
+function spawnFood(kind) {
+  if (kind === undefined) {
+    const r = Math.random();
+    if (r < 0.50) kind = "normal";
+    else if (r < 0.72) kind = "gold";
+    else if (r < 0.88) kind = "speed";
+    else kind = "poison";
+  }
+  const info = {
+    normal: [FOOD_RED, 10],
+    gold:   [FOOD_GOLD, 30],
+    poison: [FOOD_PURP, -20],
+    speed:  [FOOD_BLUE, 15],
+  }[kind];
+  foods.push({ pos: randCell(), kind, color: info[0], points: info[1] });
+}
+
+function emit(gx, gy, color, count = 14) {
+  const px = gx * CELL + CELL / 2;
+  const py = gy * CELL + CELL / 2 + PANEL_H;
+  for (let i = 0; i < count; i++) particles.push(new Particle(px, py, color));
+}
+
+function tickInterval() {
+  let interval = 7 - Math.min(Math.floor(score / 120), 3);
+  if (boost > 0) interval = Math.max(2, interval - 2);
+  return Math.max(2, interval);
+}
+
+function reset() {
+  const cx = COLS >> 1, cy = ROWS >> 1;
+  snake = [];
+  for (let i = 0; i < 5; i++) snake.push([cx - i, cy]);
+  dir = RIGHT; bufDir = RIGHT;
+  score = 0; alive = true; paused = false;
+  grow = 0; combo = 0; comboCd = 0; boost = 0;
+  portal = null; portalCd = 0;
+  foods = []; particles = [];
+  frame = 0; shake = 0;
+  spawnFood("normal");
+  spawnFood();
+  spawnFood();
+}
+
+// ═══════════════ 输入 ═══════════════
+window.addEventListener("keydown", e => {
+  const code = e.code;
+  if (code.startsWith("Arrow") || code === "Space") e.preventDefault();
+  if (code === "KeyP") {
+    paused = !paused;
+    return;
+  }
+  if (!alive) {
+    if (code === "Space") reset();
+    return;
+  }
+  const nd = KEY_DIR[code];
+  if (nd && !isOpposite(nd, dir)) bufDir = nd;
+});
+
+// ═══════════════ 逻辑 ═══════════════
+function update() {
+  frame++;
+
+  for (const p of particles) p.update();
+  particles = particles.filter(p => p.alive);
+
+  if (shake > 0) shake = Math.max(0, shake - 0.5);
+
+  if (!alive || paused) return;
+
+  // 连击冷却
+  if (comboCd > 0) {
+    comboCd--;
+    if (comboCd <= 0) combo = 0;
+  }
+
+  // 加速冷却
+  if (boost > 0) boost--;
+
+  // 传送门生命周期
+  if (portal) {
+    portalCd--;
+    if (portalCd <= 0) portal = null;
+  }
+  if (portal === null && Math.random() < 0.002) {
+    const a = randCell();
+    const b = randCell([a]);
+    portal = { a, b };
+    portalCd = 500;
+  }
+
+  // 保持食物数量
+  while (foods.length < 3) spawnFood();
+
+  // ── 按间隔执行游戏步 ──
+  if (frame % tickInterval() !== 0) return;
+
+  dir = bufDir;
+  const hx = snake[0][0], hy = snake[0][1];
+  const dx = dir[0], dy = dir[1];
+  let newHead = [(hx + dx + COLS) % COLS, (hy + dy + ROWS) % ROWS];
+
+  // 传送门
+  if (portal) {
+    const pairs = [
+      [portal.a, portal.b, PORTAL_B],
+      [portal.b, portal.a, PORTAL_A],
+    ];
+    for (const [src, dst, glowCol] of pairs) {
+      if (newHead[0] === src[0] && newHead[1] === src[1]) {
+        newHead = [(dst[0] + dx + COLS) % COLS, (dst[1] + dy + ROWS) % ROWS];
+        emit(dst[0], dst[1], glowCol, 18);
+        break;
+      }
+    }
+  }
+
+  // 撞自己
+  if (snake.some(s => s[0] === newHead[0] && s[1] === newHead[1])) {
+    alive = false;
+    shake = 12;
+    emit(newHead[0], newHead[1], [255, 80, 80], 30);
+    return;
+  }
+
+  snake.unshift(newHead);
+
+  // 吃食物
+  for (let i = 0; i < foods.length; i++) {
+    const food = foods[i];
+    if (food.pos[0] === newHead[0] && food.pos[1] === newHead[1]) {
+      foods.splice(i, 1);
+      combo++;
+      comboCd = 80;
+      const multiplier = Math.min(combo, 5);
+      score = Math.max(0, score + food.points * multiplier);
+      emit(newHead[0], newHead[1], food.color, 18);
+      if (food.kind === "poison") {
+        grow -= 2;
+        shake = 8;
+      } else if (food.kind === "speed") {
+        boost = 120;
+        grow += 2;
+      } else {
+        grow += 2;
+      }
+      break;
+    }
+  }
+
+  // 长度调整
+  if (grow > 0) {
+    grow--;
+  } else {
+    if (snake.length > 1) snake.pop();
+    if (grow < 0) {
+      grow++;
+      if (snake.length > 1) snake.pop();
+    }
+  }
+
+  if (snake.length < 2) {
+    alive = false;
+    shake = 12;
+  }
+}
+
+// ═══════════════ 绘制 ═══════════════
+function draw() {
+  ctx.fillStyle = css(BG_COLOR);
+  ctx.fillRect(0, 0, WIN_W, WIN_H);
+  const sk = Math.floor(shake);
+  const ox = sk > 0 ? Math.floor(Math.random() * (2 * sk + 1)) - sk : 0;
+  const oy = sk > 0 ? Math.floor(Math.random() * (2 * sk + 1)) - sk : 0;
+
+  // ── 状态栏 ──
+  ctx.fillStyle = css(PANEL_BG);
+  ctx.fillRect(0, 0, WIN_W, PANEL_H);
+  ctx.strokeStyle = css(BORDER_CLR);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, PANEL_H - 0.5);
+  ctx.lineTo(WIN_W, PANEL_H - 0.5);
+  ctx.stroke();
+
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  ctx.font = `bold 24px ${FONT}`;
+  ctx.fillStyle = css(GREEN);
+  ctx.fillText(`得分: ${score}`, 14, 12);
+  if (combo > 1) {
+    const txt = `连击 x${combo}!`;
+    ctx.fillStyle = css(FOOD_GOLD);
+    ctx.textAlign = "center";
+    ctx.fillText(txt, WIN_W / 2, 12);
+    ctx.textAlign = "left";
+  }
+  ctx.font = `14px ${FONT}`;
+  ctx.fillStyle = css(GRAY);
+  ctx.fillText(`长度: ${snake.length}`, WIN_W - 95, 8);
+  if (boost > 0) {
+    ctx.fillStyle = css(FOOD_BLUE);
+    ctx.fillText(`加速 ${Math.floor(boost / 60) + 1}s`, WIN_W - 95, 28);
+  }
+
+  // ── 游戏区(带震动偏移) ──
+  ctx.save();
+  ctx.translate(ox, PANEL_H + oy);
+  ctx.beginPath();
+  ctx.rect(0, 0, MAP_W, MAP_H);
+  ctx.clip();
+
+  ctx.strokeStyle = css(GRID_COLOR);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = 0; x <= MAP_W; x += CELL) { ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, MAP_H); }
+  for (let y = 0; y <= MAP_H; y += CELL) { ctx.moveTo(0, y + 0.5); ctx.lineTo(MAP_W, y + 0.5); }
+  ctx.stroke();
+  ctx.strokeStyle = css(BORDER_CLR);
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, MAP_W - 2, MAP_H - 2);
+
+  // 传送门
+  if (portal) {
+    for (const [pos, color] of [[portal.a, PORTAL_A], [portal.b, PORTAL_B]]) {
+      const px = pos[0] * CELL + CELL / 2;
+      const py = pos[1] * CELL + CELL / 2;
+      const pulse = 0.7 + 0.3 * Math.abs(Math.sin(frame * 0.08));
+      const r = Math.floor(CELL / 2 * pulse);
+      ctx.fillStyle = css(color, 35 / 255);
+      ctx.beginPath();
+      ctx.arc(px, py, CELL, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = css(color);
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = css(WHITE);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(px, py, Math.max(1, Math.floor(r / 2)), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  // 食物
+  for (const food of foods) {
+    const fx = food.pos[0], fy = food.pos[1];
+    const cx = fx * CELL + CELL / 2;
+    const cy = fy * CELL + CELL / 2;
+    const col = food.color;
+    const glowA = (20 + 12 * Math.sin(frame * 0.07)) / 255;
+    ctx.fillStyle = css(col, glowA);
+    ctx.beginPath();
+    ctx.arc(cx, cy, CELL, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (food.kind === "gold") {
+      ctx.beginPath();
+      for (let i = 0; i < 5; i++) {
+        for (const [offset, radius] of [[-90, CELL / 2.5], [-54, CELL / 5]]) {
+          const angle = (i * 72 + offset) * Math.PI / 180;
+          const px2 = cx + Math.floor(Math.cos(angle) * radius);
+          const py2 = cy + Math.floor(Math.sin(angle) * radius);
+          i === 0 && offset === -90 ? ctx.moveTo(px2, py2) : ctx.lineTo(px2, py2);
+        }
+      }
+      ctx.closePath();
+      ctx.fillStyle = css(col);
+      ctx.fill();
+      ctx.strokeStyle = css([255, 230, 100]);
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else if (food.kind === "poison") {
+      ctx.fillStyle = css(col);
+      ctx.beginPath();
+      ctx.arc(cx, cy, CELL / 2 - 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = css([80, 20, 120]);
+      ctx.lineWidth = 2;
+      for (const sign of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(cx + sign * 4, cy - 4); ctx.lineTo(cx + sign * 1, cy - 1);
+        ctx.moveTo(cx + sign * 1, cy - 4); ctx.lineTo(cx + sign * 4, cy - 1);
+        ctx.stroke();
+      }
+    } else if (food.kind === "speed") {
+      const bolt = [[cx-3, cy-8], [cx+3, cy-1], [cx-1, cy-1],
+                    [cx+4, cy+8], [cx-2, cy+1], [cx+1, cy+1]];
+      ctx.beginPath();
+      ctx.moveTo(bolt[0][0], bolt[0][1]);
+      for (let i = 1; i < bolt.length; i++) ctx.lineTo(bolt[i][0], bolt[i][1]);
+      ctx.closePath();
+      ctx.fillStyle = css(col);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = css(col);
+      ctx.beginPath();
+      ctx.arc(cx, cy, CELL / 2 - 2, 0, Math.PI * 2);
+      ctx.fill();
+      const hl = col.map(c => Math.min(255, c + 80));
+      ctx.fillStyle = css(hl);
+      ctx.beginPath();
+      ctx.arc(cx - 3, cy - 3, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // 蛇
+  const n = snake.length;
+  for (let i = 0; i < n; i++) {
+    const sx = snake[i][0], sy = snake[i][1];
+    const t = i / Math.max(n - 1, 1);
+    let color = HEAD_COLOR.map((v, j) => Math.floor(v + (TAIL_COLOR[j] - v) * t));
+    if (boost > 0 && i < 3) {
+      const flash = Math.abs(Math.sin(frame * 0.25));
+      color = color.map((v, j) => Math.floor(v + (255 - v) * flash * 0.35));
+    }
+    roundRect(sx * CELL + 1, sy * CELL + 1, CELL - 2, CELL - 2, 6);
+    ctx.fillStyle = css(color);
+    ctx.fill();
+    roundRect(sx * CELL + 4, sy * CELL + 4, CELL - 8, CELL - 8, 4);
+    ctx.fillStyle = css(color.map(v => Math.min(255, v + 20)));
+    ctx.fill();
+    if (i === 0) {
+      const hxPx = sx * CELL + CELL / 2;
+      const hyPx = sy * CELL + CELL / 2;
+      const d = dir;
+      const perp = [-d[1], d[0]];
+      for (const sign of [-1, 1]) {
+        const ex = hxPx + d[0] * 5 + perp[0] * 5 * sign;
+        const ey = hyPx + d[1] * 5 + perp[1] * 5 * sign;
+        ctx.fillStyle = css(WHITE);
+        ctx.beginPath(); ctx.arc(ex, ey, 4, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "rgb(10,10,10)";
+        ctx.beginPath(); ctx.arc(ex + d[0] * 2, ey + d[1] * 2, 2, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
+
+  // 粒子(屏幕坐标,不随震动偏移)
+  for (const p of particles) p.draw();
+
+  // 图例
+  if (frame < 360) {
+    ctx.font = `14px ${FONT}`;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = css(GRAY);
+    ctx.fillText("红=普通  金=高分(连击!)  紫=毒药(缩短!)  蓝=加速  传送门=穿越!", 14, WIN_H - 22);
+  }
+
+  // 署名
+  ctx.font = `12px ${FONT}`;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "bottom";
+  ctx.fillStyle = css(GRAY, 0.8);
+  ctx.fillText("by 吕程", WIN_W - 8, WIN_H - 5);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+
+  // 暂停
+  if (paused) {
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0, 0, WIN_W, WIN_H);
+    ctx.font = `bold 42px ${FONT}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = css(WHITE);
+    ctx.fillText("暂停", WIN_W / 2, WIN_H / 2 - 30);
+    ctx.textAlign = "left";
+  }
+
+  // 游戏结束
+  if (!alive) {
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.fillRect(0, 0, WIN_W, WIN_H);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    const lines = [
+      ["游戏结束", `bold 42px ${FONT}`, FOOD_RED, -80],
+      [`最终得分: ${score}`, `bold 24px ${FONT}`, WHITE, -20],
+      ["空格键 重新开始  |  ESC 退出", `14px ${FONT}`, GRAY, 30],
+    ];
+    for (const [text, fnt, color, dy] of lines) {
+      ctx.font = fnt;
+      ctx.fillStyle = css(color);
+      ctx.fillText(text, WIN_W / 2, WIN_H / 2 + dy);
+    }
+    ctx.textAlign = "left";
+  }
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) { ctx.roundRect(x, y, w, h, r); return; }
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// ═══════════════ 自适应缩放 ═══════════════
+function fit() {
+  const s = Math.min(window.innerWidth / WIN_W, window.innerHeight / WIN_H);
+  canvas.style.width = Math.floor(WIN_W * s) + "px";
+  canvas.style.height = Math.floor(WIN_H * s) + "px";
+}
+window.addEventListener("resize", fit);
+fit();
+
+// ═══════════════ 主循环(固定 60Hz 逻辑步) ═══════════════
+reset();
+const STEP = 1000 / 60;
+let last = performance.now(), acc = 0;
+function loop(now) {
+  acc += now - last;
+  last = now;
+  if (acc > 250) acc = 250;
+  while (acc >= STEP) {
+    update();
+    acc -= STEP;
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// 自动获取键盘焦点
+canvas.focus();
+canvas.addEventListener("click", () => canvas.focus());
+window.addEventListener("load", () => canvas.focus());
+</script>
+</body>
+</html>

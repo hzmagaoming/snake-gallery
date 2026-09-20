@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>贪吃蛇 · 金苹果与道具</title>
+<style>
+    html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: #10131c;
+        overflow: hidden;
+    }
+    #stage {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    #game {
+        outline: none;
+        border-radius: 8px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+        cursor: default;
+    }
+</style>
+</head>
+<body>
+<div id="stage">
+    <canvas id="game" width="660" height="580" tabindex="0"></canvas>
+</div>
+<script>
+"use strict";
+
+// ---------- 基本配置(与原版一致) ----------
+const CELL = 22;
+const COLS = 30, ROWS = 24;
+const HUD_H = 52;
+const WIDTH = COLS * CELL;
+const HEIGHT = ROWS * CELL + HUD_H;
+
+const SPEEDS = [["低", 6], ["中", 10], ["高", 15]];
+const DEFAULT_SPEED = 1;
+
+// ---------- 配色 ----------
+const BG        = "rgb(22,25,38)";
+const BG_ALT    = "rgb(28,31,46)";
+const HUD_BG    = "rgb(16,19,30)";
+const HUD_LINE  = "rgb(44,50,68)";
+const PANEL_BG  = "rgb(33,37,54)";
+const SNAKE_HEAD = [92, 227, 172];
+const SNAKE_TAIL = [26, 128, 96];
+const EYE_WHITE = "rgb(245,250,252)";
+const EYE_BLACK = "rgb(18,26,34)";
+const FOOD      = "rgb(255,103,103)";
+const FOOD_HI   = "rgb(255,196,148)";
+const GOLD      = "rgb(255,201,64)";
+const GOLD_HI   = "rgb(255,240,168)";
+const TEXT      = "rgb(236,240,247)";
+const TEXT_DIM  = "rgb(158,168,186)";
+const ACCENT    = "rgb(255,206,84)";
+const BTN_BG    = "rgb(38,44,60)";
+const BTN_HOVER = "rgb(52,60,80)";
+const BTN_ACTIVE = "rgb(46,168,126)";
+
+// ---------- 金苹果 ----------
+const GOLD_CD = 5000;
+const GOLD_DURATION = 3000;
+const NORMAL_SCORE = 10;
+const GOLD_SCORE = 30;
+
+// ---------- 道具 ----------
+const POWERUP_INTERVAL = 7000;
+const POWERUP_LIFE = 6000;
+const POWERUP_BLINK = 1500;
+const SLOW_FACTOR = 1.8;
+const EFFECT_DUR = { slow: 5000, shield: 6000, ghost: 8000 };
+const POWERUP_TYPES = ["slow", "shield", "ghost"];
+const POWERUP_META = {
+    slow:   { name: "减速", label: "慢", color: "rgb(96,165,250)" },
+    shield: { name: "护盾", label: "盾", color: "rgb(250,204,21)" },
+    ghost:  { name: "穿墙", label: "穿", color: "rgb(168,130,255)" },
+};
+
+const DIR_KEYS = {
+    ArrowUp: [0, -1], w: [0, -1], W: [0, -1],
+    ArrowDown: [0, 1], s: [0, 1], S: [0, 1],
+    ArrowLeft: [-1, 0], a: [-1, 0], A: [-1, 0],
+    ArrowRight: [1, 0], d: [1, 0], D: [1, 0],
+};
+const SPEED_KEYS = { "1": 0, "2": 1, "3": 2 };
+
+const FONT_FAMILY = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+const FONTS = {
+    small: `16px ${FONT_FAMILY}`,
+    med:   `20px ${FONT_FAMILY}`,
+    large: `40px ${FONT_FAMILY}`,
+    title: `48px ${FONT_FAMILY}`,
+    tiny:  `14px ${FONT_FAMILY}`,
+};
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+let state = "menu";            // menu / playing / paused / over / rules
+let speedIndex = DEFAULT_SPEED;
+let g = resetGame();
+let moveAcc = 0;
+let mousePos = { x: -1, y: -1 };
+let lastTime = performance.now();
+
+function lerpColor(c1, c2, t) {
+    t = Math.max(0, Math.min(1, t));
+    const r = Math.round(c1[0] + (c2[0] - c1[0]) * t);
+    const gg = Math.round(c1[1] + (c2[1] - c1[1]) * t);
+    const b = Math.round(c1[2] + (c2[2] - c1[2]) * t);
+    return `rgb(${r},${gg},${b})`;
+}
+
+function drawText(text, font, color, x, y, align = "center", baseline = "middle") {
+    ctx.font = font;
+    ctx.fillStyle = color;
+    ctx.textAlign = align;
+    ctx.textBaseline = baseline;
+    ctx.fillText(text, x, y);
+}
+
+function textWidth(text, font) {
+    ctx.font = font;
+    return ctx.measureText(text).width;
+}
+
+function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+}
+
+function randomFreeCell(snake, avoid = []) {
+    const snakeSet = new Set(snake.map(p => p[0] + "," + p[1]));
+    const avoidSet = new Set(avoid.map(p => p[0] + "," + p[1]));
+    while (true) {
+        const pos = [Math.floor(Math.random() * COLS), Math.floor(Math.random() * ROWS)];
+        const key = pos[0] + "," + pos[1];
+        if (!snakeSet.has(key) && !avoidSet.has(key)) return pos;
+    }
+}
+
+function drawGlow(cx, cy, r, color, a1, a2) {
+    ctx.save();
+    ctx.globalAlpha = a1;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = a2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+}
+
+function drawFood(fx, fy, golden) {
+    const color = golden ? GOLD : FOOD;
+    const hi = golden ? GOLD_HI : FOOD_HI;
+    const cx = fx * CELL + CELL / 2;
+    const cy = HUD_H + fy * CELL + CELL / 2;
+    const r = CELL / 2 - 3;
+    drawGlow(cx, cy, r, color, 26 / 255, 48 / 255);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = hi;
+    ctx.beginPath();
+    ctx.arc(cx - r / 3, cy - r / 3, r / 3, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+function drawPowerup(pu) {
+    if (!pu) return;
+    if (pu.remain < POWERUP_BLINK && Math.floor(pu.remain / 150) % 2 === 0) return;
+    const meta = POWERUP_META[pu.type];
+    const fx = pu.pos[0], fy = pu.pos[1];
+    const cx = fx * CELL + CELL / 2;
+    const cy = HUD_H + fy * CELL + CELL / 2;
+    drawGlow(cx, cy, CELL / 2 - 2, meta.color, 26 / 255, 48 / 255);
+    roundRect(cx - CELL / 2 + 3, cy - CELL / 2 + 3, CELL - 6, CELL - 6, 8);
+    ctx.fillStyle = meta.color;
+    ctx.fill();
+    ctx.strokeStyle = "rgb(255,255,255)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    drawText(meta.label, FONTS.tiny, "rgb(255,255,255)", cx, cy + 1);
+}
+
+function drawSnake(snake, direction) {
+    const n = snake.length;
+    const pts = snake.map(([sx, sy]) => [sx * CELL + CELL / 2, HUD_H + sy * CELL + CELL / 2]);
+
+    ctx.lineCap = "round";
+    for (let i = 0; i < n - 1; i++) {
+        // 穿墙时相邻两段会跨越整张棋盘, 跳过这种连线
+        if (Math.abs(pts[i][0] - pts[i + 1][0]) > CELL || Math.abs(pts[i][1] - pts[i + 1][1]) > CELL) continue;
+        ctx.strokeStyle = lerpColor(SNAKE_HEAD, SNAKE_TAIL, i / Math.max(1, n - 1));
+        ctx.lineWidth = CELL - 2;
+        ctx.beginPath();
+        ctx.moveTo(pts[i][0], pts[i][1]);
+        ctx.lineTo(pts[i + 1][0], pts[i + 1][1]);
+        ctx.stroke();
+    }
+    for (let i = 0; i < n; i++) {
+        ctx.fillStyle = lerpColor(SNAKE_HEAD, SNAKE_TAIL, n === 1 ? 0 : i / (n - 1));
+        ctx.beginPath();
+        ctx.arc(pts[i][0], pts[i][1], CELL / 2 - 1, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 蛇头眼睛
+    const hx = pts[0][0], hy = pts[0][1];
+    const dx = direction[0], dy = direction[1];
+    const px = -dy, py = dx;
+    for (const sign of [-1, 1]) {
+        const ex = hx + dx * (CELL / 4) + px * sign * (CELL / 5);
+        const ey = hy + dy * (CELL / 4) + py * sign * (CELL / 5);
+        ctx.fillStyle = EYE_WHITE;
+        ctx.beginPath();
+        ctx.arc(ex, ey, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = EYE_BLACK;
+        ctx.beginPath();
+        ctx.arc(ex + dx, ey + dy, 2, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+function drawHud(score, effects) {
+    ctx.fillStyle = HUD_BG;
+    ctx.fillRect(0, 0, WIDTH, HUD_H);
+    ctx.fillStyle = HUD_LINE;
+    ctx.fillRect(0, HUD_H - 1, WIDTH, 1);
+
+    drawText("贪吃蛇", FONTS.small, TEXT, 16, HUD_H / 2, "left");
+
+    const speedText = `速度 ${SPEEDS[speedIndex][0]}`;
+    let x = WIDTH - 16;
+    drawText(speedText, FONTS.small, TEXT_DIM, x, HUD_H / 2, "right");
+    x -= textWidth(speedText, FONTS.small) + 20;
+
+    const scoreText = `得分 ${score}`;
+    drawText(scoreText, FONTS.small, ACCENT, x, HUD_H / 2, "right");
+    x -= textWidth(scoreText, FONTS.small) + 16;
+
+    for (const key of POWERUP_TYPES) {
+        if (effects[key] > 0) {
+            const label = `${POWERUP_META[key].name} ${Math.floor(effects[key] / 1000)}s`;
+            drawText(label, FONTS.tiny, POWERUP_META[key].color, x, HUD_H / 2, "right");
+            x -= textWidth(label, FONTS.tiny) + 12;
+        }
+    }
+}
+
+function speedButtons() {
+    const bw = 110, bh = 64, gap = 20;
+    const total = bw * 3 + gap * 2;
+    const x0 = (WIDTH - total) / 2;
+    const y = 190;
+    return [0, 1, 2].map(i => ({ x: x0 + i * (bw + gap), y, w: bw, h: bh }));
+}
+
+function pointInRect(p, r) {
+    return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+}
+
+function drawOverlay() {
+    ctx.fillStyle = "rgba(10,12,20,0.745)";
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+}
+
+function drawMenu() {
+    drawOverlay();
+    drawText("贪吃蛇", FONTS.title, TEXT, WIDTH / 2, 92);
+    drawText("金苹果 · 道具 · 三档速度", FONTS.small, TEXT_DIM, WIDTH / 2, 140);
+
+    const rects = speedButtons();
+    for (let i = 0; i < 3; i++) {
+        const [name, sps] = SPEEDS[i];
+        const rect = rects[i];
+        const hover = pointInRect(mousePos, rect);
+        const active = i === speedIndex;
+        ctx.fillStyle = active ? BTN_ACTIVE : (hover ? BTN_HOVER : BTN_BG);
+        roundRect(rect.x, rect.y, rect.w, rect.h, 14);
+        ctx.fill();
+        if (active) {
+            ctx.strokeStyle = "rgb(255,255,255)";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+        drawText(name, FONTS.med, active ? "rgb(255,255,255)" : TEXT, rect.x + rect.w / 2, rect.y + rect.h / 2 - 10);
+        drawText(`${sps} 格/秒`, FONTS.tiny, TEXT_DIM, rect.x + rect.w / 2, rect.y + rect.h / 2 + 16);
+    }
+
+    drawText("方向键 / WASD 移动 · 空格暂停 · 1/2/3 切速度", FONTS.small, TEXT_DIM, WIDTH / 2, 322);
+    drawText("金苹果 30 分 · 道具：慢/盾/穿", FONTS.small, TEXT_DIM, WIDTH / 2, 356);
+    drawText("按 H 查看玩法规则 · 回车/空格开始 · Esc 返回菜单", FONTS.small, TEXT_DIM, WIDTH / 2, HEIGHT - 34);
+}
+
+function drawRules() {
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    drawText("玩法规则", FONTS.title, TEXT, WIDTH / 2, 56);
+
+    ctx.fillStyle = PANEL_BG;
+    roundRect(36, 106, WIDTH - 72, 396, 16);
+    ctx.fill();
+
+    const rows = [
+        ["目标", "控制蛇吃食物，蛇越长、得分越高", TEXT],
+        ["移动", "方向键 / WASD 移动 · 空格暂停 · 1/2/3 切速度", TEXT],
+        ["食物", "普通食物 10 分；每 5 秒变金，金苹果 30 分", TEXT],
+        ["道具", "每 7 秒刷新一个，碰到蛇头即生效", TEXT],
+    ];
+    let y = 130;
+    for (const [head, body, color] of rows) {
+        drawText(head, FONTS.med, ACCENT, 112, y, "right", "top");
+        drawText(body, FONTS.med, color, 128, y, "left", "top");
+        y += 40;
+    }
+
+    const subs = [
+        ["slow",   "慢 · 减速 —— 移动变慢，持续 5 秒"],
+        ["shield", "盾 · 护盾 —— 撞到自己不死亡，持续 6 秒"],
+        ["ghost",  "穿 · 穿墙 —— 穿过边界到对面，持续 8 秒"],
+    ];
+    for (const [key, text] of subs) {
+        const color = POWERUP_META[key].color;
+        drawText("·", FONTS.med, color, 112, y, "left", "top");
+        drawText(text, FONTS.med, color, 128, y, "left", "top");
+        y += 40;
+    }
+
+    const tail = [
+        ["结束", "撞墙，或撞到自己（无护盾时）即结束", TEXT],
+        ["重开", "空格重开 · M 返回菜单 · Esc 返回菜单", TEXT],
+    ];
+    for (const [head, body, color] of tail) {
+        drawText(head, FONTS.med, ACCENT, 112, y, "right", "top");
+        drawText(body, FONTS.med, color, 128, y, "left", "top");
+        y += 40;
+    }
+
+    drawText("按 H / Esc 返回菜单", FONTS.small, TEXT_DIM, WIDTH / 2, HEIGHT - 26);
+}
+
+function resetGame() {
+    const snake = [];
+    for (let i = 0; i < 3; i++) snake.push([Math.floor(COLS / 2) - i, Math.floor(ROWS / 2)]);
+    return {
+        snake,
+        direction: [1, 0],
+        nextDirection: [1, 0],
+        food: randomFreeCell(snake),
+        score: 0,
+        foodGold: false,
+        goldTimer: GOLD_CD,
+        powerup: null,
+        puTimer: POWERUP_INTERVAL,
+        effects: { slow: 0, shield: 0, ghost: 0 },
+    };
+}
+
+function moveSnake() {
+    // 返回 true 表示游戏结束
+    g.direction = g.nextDirection;
+    let hx = g.snake[0][0] + g.direction[0];
+    let hy = g.snake[0][1] + g.direction[1];
+
+    // 穿墙: 越过边界从对面出来
+    if (g.effects.ghost > 0) {
+        hx = ((hx % COLS) + COLS) % COLS;
+        hy = ((hy % ROWS) + ROWS) % ROWS;
+    }
+    const head = [hx, hy];
+
+    if (hx < 0 || hx >= COLS || hy < 0 || hy >= ROWS) return true;
+    // 护盾: 撞到自己不死亡
+    const onSnake = g.snake.some(p => p[0] === hx && p[1] === hy);
+    if (onSnake && g.effects.shield <= 0) return true;
+
+    g.snake.unshift(head);
+    if (head[0] === g.food[0] && head[1] === g.food[1]) {
+        g.score += g.foodGold ? GOLD_SCORE : NORMAL_SCORE;
+        const avoid = g.powerup ? [g.powerup.pos] : [];
+        g.food = randomFreeCell(g.snake, avoid);
+        g.foodGold = false;
+        g.goldTimer = GOLD_CD;
+    } else {
+        g.snake.pop();
+    }
+
+    // 拾取道具
+    const pu = g.powerup;
+    if (pu && head[0] === pu.pos[0] && head[1] === pu.pos[1]) {
+        g.effects[pu.type] = EFFECT_DUR[pu.type];
+        g.powerup = null;
+        g.puTimer = POWERUP_INTERVAL;
+    }
+
+    return false;
+}
+
+// ---------- 输入 ----------
+function toLogicalPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: (e.clientX - rect.left) * (WIDTH / rect.width),
+        y: (e.clientY - rect.top) * (HEIGHT / rect.height),
+    };
+}
+
+canvas.addEventListener("mousemove", e => { mousePos = toLogicalPos(e); });
+canvas.addEventListener("mouseleave", () => { mousePos = { x: -1, y: -1 }; });
+canvas.addEventListener("mousedown", e => {
+    canvas.focus();
+    if (state === "menu" && e.button === 0) {
+        const pos = toLogicalPos(e);
+        const rects = speedButtons();
+        for (let i = 0; i < rects.length; i++) {
+            if (pointInRect(pos, rects[i])) {
+                speedIndex = i;
+                g = resetGame();
+                moveAcc = 0;
+                state = "playing";
+                break;
+            }
+        }
+    }
+});
+
+window.addEventListener("keydown", e => {
+    const key = e.key;
+    // 阻止方向键与空格滚动外层页面
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(key)) {
+        e.preventDefault();
+    }
+
+    if (key === "Escape") {
+        if (state === "rules") state = "menu";
+        else if (state !== "menu") state = "menu";
+        return;
+    }
+
+    if (state === "menu") {
+        if (key in SPEED_KEYS) {
+            speedIndex = SPEED_KEYS[key];
+        } else if (key === "Enter" || key === " ") {
+            g = resetGame();
+            moveAcc = 0;
+            state = "playing";
+        } else if (key === "ArrowLeft") {
+            speedIndex = (speedIndex - 1 + SPEEDS.length) % SPEEDS.length;
+        } else if (key === "ArrowRight") {
+            speedIndex = (speedIndex + 1) % SPEEDS.length;
+        } else if (key === "h" || key === "H") {
+            state = "rules";
+        }
+    } else if (state === "playing") {
+        if (key === " ") {
+            state = "paused";
+        } else if (key in SPEED_KEYS) {
+            speedIndex = SPEED_KEYS[key];
+            moveAcc = 0;
+        } else if (key in DIR_KEYS) {
+            const candidate = DIR_KEYS[key];
+            if (candidate[0] + g.direction[0] !== 0 || candidate[1] + g.direction[1] !== 0) {
+                g.nextDirection = candidate;
+            }
+        }
+    } else if (state === "paused") {
+        if (key === " ") {
+            state = "playing";
+        } else if (key in SPEED_KEYS) {
+            speedIndex = SPEED_KEYS[key];
+        }
+    } else if (state === "over") {
+        if (key === " " || key === "Enter") {
+            g = resetGame();
+            moveAcc = 0;
+            state = "playing";
+        } else if (key === "m" || key === "M") {
+            state = "menu";
+        } else if (key in SPEED_KEYS) {
+            speedIndex = SPEED_KEYS[key];
+        }
+    } else if (state === "rules") {
+        if (key === "h" || key === "H" || key === "Backspace" || key === "Enter") {
+            state = "menu";
+        }
+    }
+});
+
+// ---------- 自适应缩放 ----------
+function fitCanvas() {
+    const scale = Math.min(window.innerWidth / WIDTH, window.innerHeight / HEIGHT);
+    canvas.style.width = `${WIDTH * scale}px`;
+    canvas.style.height = `${HEIGHT * scale}px`;
+}
+window.addEventListener("resize", fitCanvas);
+fitCanvas();
+canvas.focus();
+window.addEventListener("load", () => canvas.focus());
+
+// ---------- 主循环 ----------
+function tick(now) {
+    const dt = Math.min(now - lastTime, 100);
+    lastTime = now;
+
+    if (state === "playing") {
+        moveAcc += dt;
+
+        // 金苹果计时
+        g.goldTimer -= dt;
+        if (g.goldTimer <= 0) {
+            g.foodGold = !g.foodGold;
+            g.goldTimer = g.foodGold ? GOLD_DURATION : GOLD_CD;
+        }
+
+        // 道具刷新与过期
+        g.puTimer -= dt;
+        if (g.powerup === null) {
+            if (g.puTimer <= 0) {
+                g.powerup = {
+                    type: POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)],
+                    pos: randomFreeCell(g.snake, [g.food]),
+                    remain: POWERUP_LIFE,
+                };
+            }
+        } else {
+            g.powerup.remain -= dt;
+            if (g.powerup.remain <= 0) {
+                g.powerup = null;
+                g.puTimer = POWERUP_INTERVAL;
+            }
+        }
+
+        // 生效中的道具倒计时
+        for (const key of Object.keys(g.effects)) {
+            if (g.effects[key] > 0) g.effects[key] = Math.max(0, g.effects[key] - dt);
+        }
+
+        // 蛇的移动(减速效果影响速度)
+        let sps = SPEEDS[speedIndex][1];
+        if (g.effects.slow > 0) sps /= SLOW_FACTOR;
+        const interval = 1000 / sps;
+        while (moveAcc >= interval) {
+            moveAcc -= interval;
+            if (moveSnake()) {
+                state = "over";
+                break;
+            }
+        }
+    }
+
+    // ---------- 绘制 ----------
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    for (let row = 0; row < ROWS; row++) {
+        for (let col = 0; col < COLS; col++) {
+            if ((row + col) % 2 === 0) {
+                ctx.fillStyle = BG_ALT;
+                ctx.fillRect(col * CELL, HUD_H + row * CELL, CELL, CELL);
+            }
+        }
+    }
+
+    drawFood(g.food[0], g.food[1], g.foodGold);
+    drawSnake(g.snake, g.direction);
+    drawPowerup(g.powerup);
+    drawHud(g.score, g.effects);
+
+    // 署名
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    drawText("by 雷安琪", `11px ${FONT_FAMILY}`, TEXT_DIM, WIDTH - 8, HEIGHT - 8, "right", "bottom");
+    ctx.restore();
+
+    if (state === "menu") {
+        drawMenu();
+    } else if (state === "paused") {
+        drawOverlay();
+        drawText("已暂停", FONTS.large, TEXT, WIDTH / 2, HEIGHT / 2 - 16);
+        drawText("按空格继续", FONTS.small, TEXT_DIM, WIDTH / 2, HEIGHT / 2 + 28);
+    } else if (state === "over") {
+        drawOverlay();
+        drawText("游戏结束", FONTS.large, TEXT, WIDTH / 2, HEIGHT / 2 - 44);
+        drawText(`得分 ${g.score}`, FONTS.med, ACCENT, WIDTH / 2, HEIGHT / 2);
+        drawText("按空格重新开始 · 按 M 返回菜单", FONTS.small, TEXT_DIM, WIDTH / 2, HEIGHT / 2 + 44);
+    } else if (state === "rules") {
+        drawRules();
+    }
+
+    requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

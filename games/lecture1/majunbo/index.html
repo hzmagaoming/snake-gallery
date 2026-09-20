@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>贪吃蛇 - 马俊博</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#0e1a12; }
+  body { display:flex; flex-direction:column; align-items:center; justify-content:center;
+         font-family:"Consolas","PingFang SC",monospace; overflow:hidden; }
+  #wrap { display:flex; flex-direction:column; align-items:stretch; transform-origin:center center; }
+  canvas { display:block; background:#15241a; outline:none; }
+  #bar { background:#22332a; color:#cccccc; font-size:14px; padding:6px 8px;
+         text-align:center; user-select:none; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="528" height="528" tabindex="0"></canvas>
+  <div id="bar">方向键/WASD 移动 · 空格暂停 · 回车重开</div>
+</div>
+<script>
+"use strict";
+const CELL = 22, COLS = 24, ROWS = 24, SPEED = 110;
+const W = COLS * CELL, H = ROWS * CELL;
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const wrap = document.getElementById("wrap");
+
+function lerp(a, b, t) { return Math.round(a + (b - a) * t); }
+function bodyColor(i, n) {
+  const t = i / Math.max(n - 1, 1);
+  return "rgb(" + lerp(70, 22, t) + "," + lerp(225, 110, t) + "," + lerp(75, 35, t) + ")";
+}
+
+let snake, dir, nextDir, alive, paused, score, frame, food, timer;
+
+function reset() {
+  snake = [{ x: COLS >> 1, y: ROWS >> 1 }];
+  dir = { x: 1, y: 0 };
+  nextDir = { x: 1, y: 0 };
+  alive = true; paused = false; score = 0; frame = 0;
+  spawnFood();
+  draw();
+}
+
+function spawnFood() {
+  const empty = [];
+  for (let x = 0; x < COLS; x++)
+    for (let y = 0; y < ROWS; y++)
+      if (!snake.some(s => s.x === x && s.y === y)) empty.push({ x, y });
+  food = empty.length ? empty[(Math.random() * empty.length) | 0] : null;
+}
+
+function tick() {
+  if (alive && !paused) { frame++; step(); }
+}
+
+function step() {
+  dir = nextDir;
+  const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+  if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS ||
+      snake.some(s => s.x === head.x && s.y === head.y)) {
+    alive = false; draw(); return;
+  }
+  snake.unshift(head);
+  if (food && head.x === food.x && head.y === food.y) { score++; spawnFood(); }
+  else snake.pop();
+  draw();
+}
+
+function oval(cx, cy, rx, ry, fill, stroke) {
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
+}
+
+function drawGrid() {
+  ctx.strokeStyle = "#1c3326";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 1; i < COLS; i++) { ctx.moveTo(i * CELL + .5, 0); ctx.lineTo(i * CELL + .5, H); }
+  for (let j = 1; j < ROWS; j++) { ctx.moveTo(0, j * CELL + .5); ctx.lineTo(W, j * CELL + .5); }
+  ctx.stroke();
+}
+
+function drawHead(cx, cy) {
+  const r = CELL * 0.5;
+  const dx = dir.x, dy = dir.y;
+  const px = -dy, py = dx;
+
+  oval(cx, cy, r, r, "#46e34b", "#0d3311");
+
+  // 吐信（每 6 帧闪现约一半时间）
+  if (alive && !paused && frame % 6 < 3) {
+    const fx = cx + dx * (r + 1), fy = cy + dy * (r + 1);
+    const tx = cx + dx * (r + 10), ty = cy + dy * (r + 10);
+    ctx.strokeStyle = "#ff4d6d";
+    ctx.lineCap = "round";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(tx, ty); ctx.stroke();
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(tx, ty); ctx.lineTo(tx + dx * 4 - py * 4, ty + dy * 4 - px * 4);
+    ctx.moveTo(tx, ty); ctx.lineTo(tx + dx * 4 + py * 4, ty + dy * 4 + px * 4);
+    ctx.stroke();
+    ctx.lineCap = "butt";
+  }
+
+  // 眼睛（朝行进方向前移）
+  const eFwd = r * 0.38, eOff = r * 0.5;
+  for (const s of [1, -1]) {
+    const ex = cx + dx * eFwd + px * eOff * s;
+    const ey = cy + dy * eFwd + py * eOff * s;
+    oval(ex, ey, 3.2, 3.2, "white");
+    oval(ex, ey, 1.4, 1.4, "black");
+    oval(ex - 0.7, ey - 1.1, 0.5, 0.5, "white");
+  }
+}
+
+function drawFood() {
+  if (!food) return;
+  const cx = food.x * CELL + CELL / 2, cy = food.y * CELL + CELL / 2;
+  const r = CELL * 0.4;
+  // 苹果
+  oval(cx, cy, r, r, "#e53935", "#a31515");
+  // 高光
+  oval(cx - r * 0.3, cy - r * 0.35, r * 0.25, r * 0.25, "#ff8a80");
+  // 果柄
+  ctx.strokeStyle = "#6d4c41"; ctx.lineWidth = 2; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(cx, cy - r); ctx.lineTo(cx + 2, cy - r - 5); ctx.stroke();
+  ctx.lineCap = "butt";
+  // 叶子
+  oval(cx + 5.5, cy - r - 4.5, 3.5, 2.5, "#66bb6a");
+}
+
+function draw() {
+  ctx.fillStyle = "#15241a";
+  ctx.fillRect(0, 0, W, H);
+  drawGrid();
+  const n = snake.length;
+  // 从尾到头绘制，保证头在最上层
+  for (let idx = n - 1; idx >= 0; idx--) {
+    const cx = snake[idx].x * CELL + CELL / 2;
+    const cy = snake[idx].y * CELL + CELL / 2;
+    if (idx === 0) { drawHead(cx, cy); continue; }
+    const r = CELL * 0.46;
+    oval(cx, cy, r, r, bodyColor(idx, n), "#0d3311");
+    // 鳞片高光（对应 tkinter stipple=gray25 的半透明效果）
+    oval(cx - r * 0.2, cy - r * 0.3, r * 0.3, r * 0.25, "rgba(191,245,176,0.25)");
+  }
+  drawFood();
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "16px Consolas, monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillText("得分: " + score, W - 6, 6);
+
+  ctx.fillStyle = "rgba(255,255,255,0.45)";
+  ctx.font = "11px Consolas, monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("by 马俊博", 6, H - 5);
+
+  if (!alive) overlay("游戏结束 · 回车重开", "#ff6b6b");
+  else if (paused) overlay("已暂停", "#ffeb3b");
+}
+
+function overlay(text, color) {
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = color;
+  ctx.font = "24px Consolas, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, W / 2, H / 2);
+}
+
+function onKey(e) {
+  const k = e.key;
+  if (k === "Enter") { reset(); e.preventDefault(); return; }
+  if (k === " ") {
+    if (alive) paused = !paused;
+    draw();
+    e.preventDefault();
+    return;
+  }
+  const lower = k.length === 1 ? k.toLowerCase() : k;
+  if ((k === "ArrowUp" || lower === "w") && !(dir.x === 0 && dir.y === 1)) nextDir = { x: 0, y: -1 };
+  else if ((k === "ArrowDown" || lower === "s") && !(dir.x === 0 && dir.y === -1)) nextDir = { x: 0, y: 1 };
+  else if ((k === "ArrowLeft" || lower === "a") && !(dir.x === 1 && dir.y === 0)) nextDir = { x: -1, y: 0 };
+  else if ((k === "ArrowRight" || lower === "d") && !(dir.x === -1 && dir.y === 0)) nextDir = { x: 1, y: 0 };
+  else return;
+  e.preventDefault();
+}
+
+canvas.addEventListener("keydown", onKey);
+canvas.addEventListener("click", () => canvas.focus());
+
+function fit() {
+  const bar = document.getElementById("bar");
+  const scale = Math.min(window.innerWidth / W, window.innerHeight / (H + bar.offsetHeight), 1.6);
+  wrap.style.transform = "scale(" + scale + ")";
+}
+window.addEventListener("resize", fit);
+
+reset();
+timer = setInterval(tick, SPEED);
+fit();
+canvas.focus();
+</script>
+</body>
+</html>

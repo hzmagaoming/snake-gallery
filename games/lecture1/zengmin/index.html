@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Snake | Sweet Garden · by 曾敏</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#efebe2; }
+  body { display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  #stage {
+    position:relative;
+    width:min(100vw, calc(100vh * 960 / 760));
+    height:min(100vh, calc(100vw * 760 / 960));
+    display:flex; align-items:center; justify-content:center;
+  }
+  canvas {
+    width:100%; height:100%;
+    outline:none; display:block;
+  }
+  #credit {
+    position:absolute; right:10px; bottom:6px;
+    font:12px "PingFang SC","Microsoft YaHei",sans-serif;
+    color:rgba(67,72,70,.55); pointer-events:none;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c" width="960" height="760" tabindex="0"></canvas>
+  <div id="credit">by 曾敏</div>
+</div>
+<script>
+"use strict";
+/* ============================================================
+ * Snake | Sweet Garden  —— 曾敏 pygame 原作的网页忠实移植
+ * 逻辑分辨率 960x760，CSS 缩放适配 iframe
+ * ============================================================ */
+const WIDTH = 960, HEIGHT = 760;
+const CELL_SIZE = 24;
+const BOARD_WIDTH = 720, BOARD_HEIGHT = 576;
+const BOARD_LEFT = (WIDTH - BOARD_WIDTH) / 2;   // 120
+const BOARD_TOP = 120;
+const COLS = BOARD_WIDTH / CELL_SIZE;           // 30
+const ROWS = BOARD_HEIGHT / CELL_SIZE;          // 24
+const FOODS_PER_LEVEL = 5;
+
+const BACKGROUND_TOP = [191, 207, 205];
+const BACKGROUND_BOTTOM = [232, 218, 201];
+const PANEL = [244, 240, 231];
+const PANEL_LIGHT = [181, 166, 151];
+const TEXT = [67, 72, 70];
+const MUTED = [128, 127, 119];
+const GREEN = [143, 166, 148];
+const GREEN_DARK = [91, 116, 104];
+const RED = [174, 116, 108];
+const RED_LIGHT = [199, 149, 132];
+const YELLOW = [190, 165, 119];
+const CHEEK = [202, 137, 130];
+const CREAM = [232, 211, 174];
+const SNAKE_STAGE_COLORS = [
+  [[91, 116, 104], [143, 166, 148], [187, 196, 169]],
+  [[104, 127, 137], [153, 172, 177], [193, 202, 196]],
+  [[146, 119, 93], [181, 151, 116], [211, 185, 145]],
+  [[116, 116, 130], [153, 153, 166], [194, 188, 181]],
+  [[150, 103, 105], [183, 132, 128], [211, 164, 145]],
+  [[89, 126, 119], [137, 168, 153], [181, 196, 169]],
+  [[160, 138, 90], [192, 169, 116], [218, 195, 146]],
+  [[105, 124, 139], [145, 160, 174], [187, 198, 199]],
+  [[104, 137, 101], [151, 174, 124], [190, 199, 155]],
+  [[151, 107, 132], [184, 137, 157], [211, 169, 177]],
+];
+const OBSTACLE_THEMES = [
+  [[116, 139, 119], [158, 173, 143], [198, 201, 169]],
+  [[112, 135, 143], [153, 174, 177], [194, 202, 193]],
+  [[157, 130, 102], [186, 157, 120], [211, 186, 146]],
+  [[130, 128, 139], [161, 159, 166], [199, 190, 173]],
+  [[157, 108, 107], [187, 139, 128], [211, 170, 143]],
+  [[105, 141, 132], [145, 173, 147], [190, 195, 162]],
+];
+const FOOD_THEMES = [
+  [[238, 91, 105], [255, 173, 142]],
+  [[242, 151, 48], [255, 213, 100]],
+  [[154, 91, 203], [213, 169, 245]],
+  [[46, 177, 190], [151, 235, 226]],
+  [[239, 185, 44], [255, 231, 120]],
+  [[232, 91, 157], [255, 176, 210]],
+];
+
+const BASE_MOVE_SPEED = 1.8;
+const SPEED_INCREASE_PER_LEVEL = 0.18;
+const SEGMENT_SPACING = CELL_SIZE * 0.82;
+
+const HIGH_KEY = "sg-l1-zengmin-high";
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+function rgb(c, a) {
+  return a === undefined
+    ? `rgb(${c[0]},${c[1]},${c[2]})`
+    : `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+}
+function cellKey(x, y) { return x + "," + y; }
+
+/* ---------- 与原版一致的几何/判定工具 ---------- */
+function cellOf(px, py) {
+  return [Math.floor((px - BOARD_LEFT) / CELL_SIZE), Math.floor((py - BOARD_TOP) / CELL_SIZE)];
+}
+function snakeCells(snake) {
+  const s = new Set();
+  for (const seg of snake) {
+    const c = cellOf(seg[0], seg[1]);
+    s.add(cellKey(c[0], c[1]));
+  }
+  return s;
+}
+function hitsSnakeBody(pos, snake) {
+  let distFromHead = 0;
+  for (let i = 1; i < snake.length; i++) {
+    distFromHead += Math.hypot(snake[i - 1][0] - snake[i][0], snake[i - 1][1] - snake[i][1]);
+    if (distFromHead < CELL_SIZE * 1.25) continue;
+    if (Math.hypot(pos[0] - snake[i][0], pos[1] - snake[i][1]) < CELL_SIZE * 0.45) return true;
+  }
+  return false;
+}
+function levelMoveSpeed(level) {
+  return Math.min(BASE_MOVE_SPEED + (level - 1) * SPEED_INCREASE_PER_LEVEL, 3.2);
+}
+function levelTargetLength(level) {
+  return SEGMENT_SPACING + (FOODS_PER_LEVEL + level - 1) * CELL_SIZE;
+}
+/* BFS：食物/毒物只生成在蛇头可达区域 */
+function reachableCells(startKey, blocked) {
+  const reachable = new Set();
+  if (!startKey || blocked.has(startKey)) return reachable;
+  reachable.add(startKey);
+  const queue = [startKey];
+  while (queue.length) {
+    const [x, y] = queue.shift().split(",").map(Number);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy, nk = cellKey(nx, ny);
+      if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS && !blocked.has(nk) && !reachable.has(nk)) {
+        reachable.add(nk);
+        queue.push(nk);
+      }
+    }
+  }
+  return reachable;
+}
+function makeFood(snake, blocked) {
+  blocked = blocked || new Set();
+  let headKey = null;
+  if (snake.length) {
+    const c = cellOf(snake[0][0], snake[0][1]);
+    headKey = cellKey(c[0], c[1]);
+  }
+  const occupied = snakeCells(snake);
+  const reachable = reachableCells(headKey, blocked);
+  const available = [];
+  for (let y = 0; y < ROWS; y++)
+    for (let x = 0; x < COLS; x++) {
+      const k = cellKey(x, y);
+      if (reachable.has(k) && !occupied.has(k)) available.push([x, y]);
+    }
+  return available.length ? available[(Math.random() * available.length) | 0] : null;
+}
+function makePoison(snake, food, blocked) {
+  if (!snake.length || !food) return null;
+  blocked = blocked || new Set();
+  const occupied = snakeCells(snake);
+  const hc = cellOf(snake[0][0], snake[0][1]);
+  const reachable = reachableCells(cellKey(hc[0], hc[1]), blocked);
+  const foodKey = cellKey(food[0], food[1]);
+  const available = [];
+  for (let y = 0; y < ROWS; y++)
+    for (let x = 0; x < COLS; x++) {
+      const k = cellKey(x, y);
+      if (reachable.has(k) && !occupied.has(k) && k !== foodKey) available.push([x, y]);
+    }
+  return available.length ? available[(Math.random() * available.length) | 0] : null;
+}
+/* 第4关起：带缺口的螺旋迷宫 */
+function makeSpiral() {
+  const walls = new Set();
+  let left = 2, top = 2, right = COLS - 3, bottom = ROWS - 3, ring = 0;
+  while (left <= right && top <= bottom) {
+    for (let x = left; x <= right; x++) {
+      walls.add(cellKey(x, top));
+      walls.add(cellKey(x, bottom));
+    }
+    for (let y = top; y <= bottom; y++) {
+      walls.add(cellKey(left, y));
+      walls.add(cellKey(right, y));
+    }
+    if (ring % 2 === 0) {
+      walls.delete(cellKey(left, top + 2));
+      walls.delete(cellKey(right, bottom - 2));
+    } else {
+      walls.delete(cellKey(right, top + 2));
+      walls.delete(cellKey(left, bottom - 2));
+    }
+    left += 3; top += 3; right -= 3; bottom -= 3; ring++;
+  }
+  const cx = COLS >> 1, cy = ROWS >> 1;
+  for (let x = cx - 2; x <= cx + 2; x++)
+    for (let y = cy - 2; y <= cy + 2; y++) walls.delete(cellKey(x, y));
+  // 给蛇一个宽敞的落点与畅通的第一条通道
+  for (let x = cx - 5; x <= cx + 8; x++)
+    for (let y = cy - 3; y <= cy + 3; y++) walls.delete(cellKey(x, y));
+  return walls;
+}
+function makeMaze(level) {
+  if (level >= 4) return makeSpiral();
+  const walls = new Set();
+  const vSpacing = Math.max(4, 13 - Math.min(level, 9));
+  const hSpacing = Math.max(5, 15 - Math.min(level, 10));
+  for (let x = 4; x < COLS - 3; x += vSpacing) {
+    const gapY = 3 + ((x * 3 + level * 2) % (ROWS - 6));
+    for (let y = 2; y < ROWS - 2; y++)
+      if (Math.abs(y - gapY) > 1) walls.add(cellKey(x, y));
+  }
+  if (level >= 3) {
+    for (let y = 5; y < ROWS - 3; y += hSpacing) {
+      const gapX = 3 + ((y * 2 + level * 3) % (COLS - 6));
+      for (let x = 2; x < COLS - 2; x++)
+        if (Math.abs(x - gapX) > 1) walls.add(cellKey(x, y));
+    }
+  }
+  const sx = COLS >> 1, sy = ROWS >> 1;
+  for (let x = sx - 3; x <= sx + 3; x++)
+    for (let y = sy - 2; y <= sy + 2; y++) walls.delete(cellKey(x, y));
+  return walls;
+}
+
+/* ---------- 游戏状态 ---------- */
+let state = "start";           // start | playing | paused | level_clear | game_over
+let snake, direction, nextDirection, food, poison, score, maze;
+let level = 1;
+let highScore = parseInt(localStorage.getItem(HIGH_KEY) || "0", 10) || 0;
+let desiredLength = SEGMENT_SPACING;
+
+function newGame(sc, lv) {
+  score = sc || 0;
+  level = lv || 1;
+  const cx = COLS >> 1, cy = ROWS >> 1;
+  const head = [
+    BOARD_LEFT + cx * CELL_SIZE + CELL_SIZE / 2,
+    BOARD_TOP + cy * CELL_SIZE + CELL_SIZE / 2,
+  ];
+  snake = [head];
+  direction = [1, 0];
+  nextDirection = [1, 0];
+  maze = makeMaze(level);
+  food = makeFood(snake, maze);
+  poison = null;
+}
+newGame(0, 1);
+
+/* ---------- 绘制 ---------- */
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function drawText(text, size, color, x, y, center, bold) {
+  ctx.fillStyle = rgb(color);
+  ctx.font = (bold ? "bold " : "") + size + "px 'Trebuchet MS','PingFang SC','Microsoft YaHei',sans-serif";
+  ctx.textAlign = center ? "center" : "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x, y);
+}
+function drawBackground() {
+  const grad = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+  grad.addColorStop(0, rgb(BACKGROUND_TOP));
+  grad.addColorStop(1, rgb(BACKGROUND_BOTTOM));
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  // 薄雾光斑
+  ctx.fillStyle = "rgba(255,255,255,0.15)";
+  ctx.beginPath(); ctx.arc(120, 105, 120, 0, 7); ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.13)";
+  ctx.beginPath(); ctx.arc(850, 170, 155, 0, 7); ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.11)";
+  ctx.beginPath(); ctx.arc(480, 625, 190, 0, 7); ctx.fill();
+  // 顶部装饰弧线
+  ctx.strokeStyle = rgb([119, 157, 151]);
+  ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.ellipse(480, 75, 448, 205, 0, 3.35, 6.08); ctx.stroke();
+  ctx.strokeStyle = rgb([151, 183, 169]);
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.ellipse(480, 75, 406, 170, 0, 3.35, 6.08); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(72, 0); ctx.lineTo(72, 220); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(888, 0); ctx.lineTo(888, 220); ctx.stroke();
+  // 藤蔓
+  ctx.strokeStyle = rgb([84, 157, 118]);
+  ctx.lineWidth = 3;
+  ctx.lineJoin = "round";
+  for (const pts of [
+    [[22, 380], [39, 345], [31, 308], [51, 273], [45, 232]],
+    [[938, 425], [919, 385], [930, 348], [908, 312], [917, 270]],
+  ]) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.stroke();
+  }
+  ctx.fillStyle = rgb(GREEN_DARK);
+  for (const [lx, ly, ang] of [[34, 330, -1], [42, 278, 1], [923, 373, 1], [914, 315, -1]]) {
+    ctx.beginPath();
+    ctx.moveTo(lx, ly);
+    ctx.lineTo(lx + 12 * ang, ly - 8);
+    ctx.lineTo(lx + 15 * ang, ly + 4);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // 小花
+  for (const [fx, fy, fc] of [
+    [52, 540, RED], [903, 555, [180, 151, 232]],
+    [84, 140, YELLOW], [870, 128, RED_LIGHT],
+  ]) {
+    ctx.fillStyle = rgb(fc);
+    for (const [ox, oy] of [[-7, 0], [7, 0], [0, -7], [0, 7]]) {
+      ctx.beginPath(); ctx.arc(fx + ox, fy + oy, 6, 0, 7); ctx.fill();
+    }
+    ctx.fillStyle = rgb(CREAM);
+    ctx.beginPath(); ctx.arc(fx, fy, 4, 0, 7); ctx.fill();
+  }
+}
+function drawFood() {
+  if (!food) return;
+  const fx = BOARD_LEFT + food[0] * CELL_SIZE + CELL_SIZE / 2;
+  const fy = BOARD_TOP + food[1] * CELL_SIZE + CELL_SIZE / 2 + 2;
+  const [fc, fh] = FOOD_THEMES[(level - 1) % FOOD_THEMES.length];
+  const stage = (Math.floor(score / 5)) % 4;
+
+  if (stage === 0) {
+    ctx.fillStyle = rgb(fh);
+    ctx.beginPath(); ctx.ellipse(fx, fy + 1, 9, 9, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = rgb(fc);
+    ctx.beginPath(); ctx.ellipse(fx, fy - 1, 8, 9, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = rgb([255, 238, 211]);
+    ctx.beginPath(); ctx.ellipse(fx - 1.5, fy - 5, 3.5, 3, 0, 0, 7); ctx.fill();
+    ctx.strokeStyle = rgb(GREEN_DARK); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(fx + 1, fy - 9); ctx.lineTo(fx + 3, fy - 15); ctx.stroke();
+    ctx.fillStyle = rgb(GREEN);
+    ctx.beginPath(); ctx.ellipse(fx + 6, fy - 13.5, 4, 2.5, 0, 0, 7); ctx.fill();
+  } else if (stage === 1) {
+    ctx.fillStyle = rgb(fc);
+    ctx.beginPath(); ctx.arc(fx, fy, 9, 0, 7); ctx.fill();
+    ctx.strokeStyle = rgb(fh); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.ellipse(fx - 2, fy - 2.5, 4, 4.5, 0, 1.8, 4.8); ctx.stroke();
+    ctx.strokeStyle = rgb(GREEN_DARK);
+    ctx.beginPath(); ctx.moveTo(fx, fy - 8); ctx.lineTo(fx + 2, fy - 14); ctx.stroke();
+    ctx.fillStyle = rgb(GREEN);
+    ctx.beginPath(); ctx.ellipse(fx + 6, fy - 12.5, 4, 2.5, 0, 0, 7); ctx.fill();
+  } else if (stage === 2) {
+    ctx.fillStyle = rgb(fc);
+    ctx.beginPath();
+    ctx.moveTo(fx - 9, fy - 5); ctx.lineTo(fx + 9, fy - 5); ctx.lineTo(fx, fy + 10);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = rgb(CREAM);
+    for (const [sx, sy] of [[-4, -2], [1, 0], [5, -3], [0, 5]]) {
+      ctx.beginPath(); ctx.ellipse(fx + sx + 1, fy + sy + 2, 1, 2, 0, 0, 7); ctx.fill();
+    }
+    ctx.fillStyle = rgb(GREEN);
+    ctx.beginPath();
+    ctx.moveTo(fx - 8, fy - 5); ctx.lineTo(fx, fy - 12); ctx.lineTo(fx + 8, fy - 5);
+    ctx.closePath(); ctx.fill();
+  } else {
+    ctx.fillStyle = rgb(fc);
+    ctx.beginPath(); ctx.ellipse(fx, fy + 1, 9, 9, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = rgb(fh);
+    ctx.beginPath(); ctx.ellipse(fx - 1.5, fy - 4, 3.5, 3, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = rgb(YELLOW);
+    ctx.beginPath(); ctx.arc(fx, fy - 11, 2, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(fx, fy + 11, 2, 0, 7); ctx.fill();
+  }
+  // 小笑脸
+  const faceY = fy + 2;
+  ctx.fillStyle = rgb(TEXT);
+  ctx.beginPath(); ctx.arc(fx - 3, faceY, 1, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(fx + 3, faceY, 1, 0, 7); ctx.fill();
+  ctx.strokeStyle = rgb(TEXT); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.ellipse(fx, faceY + 2.5, 3, 2.5, 0, 3.4, 6.0); ctx.stroke();
+}
+function drawPoison() {
+  if (!poison) return;
+  const px = BOARD_LEFT + poison[0] * CELL_SIZE + CELL_SIZE / 2;
+  const py = BOARD_TOP + poison[1] * CELL_SIZE + CELL_SIZE / 2;
+  ctx.strokeStyle = rgb([239, 215, 91]); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(px, py, 12, 0, 7); ctx.stroke();
+  ctx.fillStyle = rgb([69, 48, 91]);
+  roundRect(px - 7, py - 6, 14, 14, 4); ctx.fill();
+  ctx.fillStyle = rgb([117, 78, 143]);
+  roundRect(px - 5, py - 10, 10, 5, 2); ctx.fill();
+  ctx.strokeStyle = rgb([255, 231, 94]); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(px - 4, py - 3); ctx.lineTo(px + 4, py + 5); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(px + 4, py - 3); ctx.lineTo(px - 4, py + 5); ctx.stroke();
+}
+function drawObstacle(wx, wy) {
+  const left = BOARD_LEFT + wx * CELL_SIZE + 2;
+  const top = BOARD_TOP + wy * CELL_SIZE + 2;
+  const [outer, inner, highlight] = OBSTACLE_THEMES[(level - 1) % OBSTACLE_THEMES.length];
+  const w = CELL_SIZE - 4;
+  const shape = (wx * 7 + wy * 11 + level) % 4;
+
+  if (shape === 0) {
+    ctx.fillStyle = rgb(outer);
+    roundRect(left, top, w, w, 5); ctx.fill();
+    ctx.fillStyle = rgb(inner);
+    roundRect(left + 2.5, top + 2.5, w - 5, w - 5, 3); ctx.fill();
+    ctx.strokeStyle = rgb(highlight); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(left + 5, top + 5); ctx.lineTo(left + 14, top + 5); ctx.stroke();
+  } else if (shape === 1) {
+    const pts = [[2, 7], [8, 2], [19, 4], [20, 16], [13, 20], [3, 17]]
+      .map(p => [left + p[0], top + p[1]]);
+    ctx.fillStyle = rgb(outer);
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = rgb(inner);
+    ctx.beginPath();
+    ctx.moveTo(pts[1][0], pts[1][1] + 2);
+    for (let i = 2; i <= 4; i++) ctx.lineTo(pts[i][0], pts[i][1] + 2);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = rgb(highlight); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); ctx.lineTo(pts[2][0], pts[2][1]); ctx.stroke();
+  } else if (shape === 2) {
+    ctx.fillStyle = rgb(outer);
+    ctx.beginPath(); ctx.ellipse(left + w / 2, top + w / 2, w / 2, w / 2, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = rgb(inner);
+    ctx.beginPath(); ctx.ellipse(left + w / 2, top + w / 2, (w - 5) / 2, (w - 5) / 2, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = rgb(highlight);
+    ctx.beginPath(); ctx.arc(left + 8, top + 7, 2, 0, 7); ctx.fill();
+  } else {
+    const pts = [[6, 2], [18, 2], [21, 11], [14, 20], [4, 17], [2, 8]]
+      .map(p => [left + p[0], top + p[1]]);
+    ctx.fillStyle = rgb(outer);
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = rgb(inner);
+    ctx.beginPath();
+    ctx.moveTo(pts[1][0], pts[1][1] + 2);
+    for (let i = 2; i <= 4; i++) ctx.lineTo(pts[i][0], pts[i][1] + 2);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = rgb(highlight); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(left + 7, top + 5); ctx.lineTo(left + 16, top + 5); ctx.stroke();
+  }
+}
+function drawBoard() {
+  ctx.fillStyle = rgb([242, 241, 224]);
+  roundRect(BOARD_LEFT, BOARD_TOP, BOARD_WIDTH, BOARD_HEIGHT, 12); ctx.fill();
+  ctx.strokeStyle = rgb([112, 137, 123]); ctx.lineWidth = 3;
+  roundRect(BOARD_LEFT, BOARD_TOP, BOARD_WIDTH, BOARD_HEIGHT, 12); ctx.stroke();
+
+  for (const k of maze) {
+    const [wx, wy] = k.split(",").map(Number);
+    drawObstacle(wx, wy);
+  }
+  ctx.fillStyle = rgb([193, 218, 190]);
+  for (const [sx, sy] of [
+    [BOARD_LEFT + 110, BOARD_TOP + 90], [BOARD_LEFT + 275, BOARD_TOP + 130],
+    [BOARD_LEFT + 610, BOARD_TOP + 440], [BOARD_LEFT + 670, BOARD_TOP + 320],
+  ]) {
+    ctx.beginPath(); ctx.ellipse(sx, sy, 10, 6, 0, 0, 7); ctx.fill();
+  }
+
+  drawFood();
+  drawPoison();
+
+  const growthLevel = Math.floor(score / 5);
+  const stage = Math.min(growthLevel, SNAKE_STAGE_COLORS.length - 1);
+  const [bodyColor, headColor, highlightColor] = SNAKE_STAGE_COLORS[stage];
+  const centers = snake.map(p => [p[0], p[1]]);
+
+  ctx.lineCap = "round";
+  for (let i = centers.length - 1; i >= 1; i--) {
+    const bodyWidth = Math.min(23, Math.max(13, 19 + Math.min(growthLevel, 3) - Math.floor(i / 4)));
+    ctx.strokeStyle = rgb(bodyColor); ctx.lineWidth = bodyWidth;
+    ctx.beginPath();
+    ctx.moveTo(centers[i][0], centers[i][1]);
+    ctx.lineTo(centers[i - 1][0], centers[i - 1][1]);
+    ctx.stroke();
+    ctx.fillStyle = rgb(bodyColor);
+    ctx.beginPath(); ctx.arc(centers[i][0], centers[i][1], bodyWidth / 2, 0, 7); ctx.fill();
+    if (i % 2 === 0) {
+      ctx.fillStyle = rgb(highlightColor);
+      ctx.beginPath();
+      ctx.arc(centers[i][0], centers[i][1], Math.max(3, bodyWidth / 5), 0, 7);
+      ctx.fill();
+    }
+  }
+  ctx.fillStyle = rgb(highlightColor);
+  for (let i = 1; i < centers.length; i++) {
+    ctx.beginPath();
+    ctx.ellipse(centers[i][0] - 3.5, centers[i][1] - 5, 2.5, 2, 0, 0, 7);
+    ctx.fill();
+  }
+
+  // 蛇头（与原版一致：始终朝右的画法）
+  const hx = centers[0][0], hy = centers[0][1];
+  const headSize = Math.min(28, 22 + growthLevel);
+  const hr = headSize / 2;
+  ctx.fillStyle = rgb(bodyColor);
+  ctx.beginPath(); ctx.ellipse(hx, hy, hr + 2, hr + 2, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = rgb(headColor);
+  ctx.beginPath(); ctx.ellipse(hx, hy, hr, hr, 0, 0, 7); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(hx - hr + 4, hy - 7);
+  ctx.lineTo(hx - hr + 2, hy - hr - 5);
+  ctx.lineTo(hx - 1, hy - hr + 1);
+  ctx.closePath(); ctx.fill();
+  const eyeX = hx + Math.floor(hr / 2);
+  const eyeOff = Math.max(4, Math.floor(hr / 2));
+  ctx.fillStyle = rgb([255, 255, 252]);
+  ctx.beginPath(); ctx.arc(eyeX, hy - eyeOff, 4, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(eyeX, hy + eyeOff, 4, 0, 7); ctx.fill();
+  ctx.fillStyle = rgb(TEXT);
+  ctx.beginPath(); ctx.arc(eyeX, hy - eyeOff, 2, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(eyeX, hy + eyeOff, 2, 0, 7); ctx.fill();
+  ctx.fillStyle = rgb([255, 255, 255]);
+  ctx.beginPath(); ctx.arc(eyeX - 1, hy - eyeOff - 1, 1, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(eyeX - 1, hy + eyeOff - 1, 1, 0, 7); ctx.fill();
+  ctx.fillStyle = rgb(CHEEK);
+  ctx.beginPath(); ctx.arc(hx - 4, hy + Math.floor(hr / 2), 2, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(hx + hr - 1, hy + Math.floor(hr / 2), 2, 0, 7); ctx.fill();
+  ctx.strokeStyle = rgb(TEXT); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.ellipse(hx + 2, hy + 3.5, 5, 3.5, 0, 3.5, 5.9); ctx.stroke();
+
+  const pad = String(score).padStart(3, "0");
+  drawText(`LEVEL ${level}   SCORE  ${pad}`, 21, TEXT, BOARD_LEFT, 88, false, true);
+}
+
+function overlay(alpha) {
+  ctx.fillStyle = `rgba(7,10,17,${alpha})`;
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+}
+function drawStartScreen() {
+  drawBackground();
+  drawText("SNAKE", 64, GREEN_DARK, WIDTH / 2, 175, true, true);
+  drawText("A tiny game of timing and appetite", 24, MUTED, WIDTH / 2, 235, true);
+  ctx.fillStyle = rgb(PANEL);
+  roundRect(WIDTH / 2 - 210, 290, 420, 170, 14); ctx.fill();
+  ctx.strokeStyle = rgb(PANEL_LIGHT); ctx.lineWidth = 2;
+  roundRect(WIDTH / 2 - 210, 290, 420, 170, 14); ctx.stroke();
+  drawText("PRESS SPACE TO START", 26, GREEN_DARK, WIDTH / 2, 337, true, true);
+  drawText("方向键或 WASD 移动 · 转弯不受整格限制", 17, MUTED, WIDTH / 2, 382, true);
+  drawText("P to pause  ·  ESC to quit", 17, MUTED, WIDTH / 2, 416, true);
+}
+function drawGameOver() {
+  overlay(0.75);
+  drawText("GAME OVER", 64, RED, WIDTH / 2, 240, true, true);
+  drawText(`Score  ${String(score).padStart(3, "0")}    Best  ${String(highScore).padStart(3, "0")}`,
+    26, [230, 226, 214], WIDTH / 2, 305, true, true);
+  drawText("PRESS SPACE TO PLAY AGAIN", 26, YELLOW, WIDTH / 2, 390, true, true);
+  drawText("按 ESC 返回开始界面", 17, MUTED, WIDTH / 2, 435, true);
+}
+function drawPause() {
+  overlay(0.61);
+  drawText("PAUSED", 26, [230, 226, 214], WIDTH / 2, HEIGHT / 2 - 20, true, true);
+  drawText("Press P to continue", 21, MUTED, WIDTH / 2, HEIGHT / 2 + 25, true);
+}
+function drawLevelClear() {
+  overlay(0.69);
+  drawText("LEVEL CLEAR!", 64, YELLOW, WIDTH / 2, 240, true, true);
+  drawText(`Level ${level} complete`, 26, [230, 226, 214], WIDTH / 2, 305, true, true);
+  drawText("PRESS SPACE OR ENTER FOR THE NEXT LEVEL", 26, GREEN, WIDTH / 2, 390, true, true);
+  drawText("按 ESC 返回开始界面", 17, MUTED, WIDTH / 2, 435, true);
+}
+
+/* ---------- 主循环 ---------- */
+let lastTime = performance.now();
+function frame(now) {
+  const elapsed = Math.min(now - lastTime, 100); // ms，防止后台切换大跳
+  lastTime = now;
+
+  if (state === "playing") {
+    direction = nextDirection;
+    const hx = snake[0][0], hy = snake[0][1];
+    const movement = levelMoveSpeed(level) * elapsed / (1000 / 60);
+    const newHead = [hx + direction[0] * movement, hy + direction[1] * movement];
+    const headCell = cellOf(newHead[0], newHead[1]);
+    const hitWall = !(
+      BOARD_LEFT <= newHead[0] && newHead[0] < BOARD_LEFT + BOARD_WIDTH &&
+      BOARD_TOP <= newHead[1] && newHead[1] < BOARD_TOP + BOARD_HEIGHT
+    );
+    const hitMaze = maze.has(cellKey(headCell[0], headCell[1]));
+    const hitSelf = hitsSnakeBody(newHead, snake);
+    const hitPoison = poison !== null && headCell[0] === poison[0] && headCell[1] === poison[1];
+
+    if (hitWall || hitMaze || hitSelf || hitPoison) {
+      highScore = Math.max(highScore, score);
+      localStorage.setItem(HIGH_KEY, String(highScore));
+      state = "game_over";
+    } else {
+      snake.unshift(newHead);
+      // 按路径长度裁剪尾巴，保持蛇身总长 = desiredLength
+      while (snake.length > 2) {
+        let pathLength = 0;
+        for (let i = 1; i < snake.length; i++)
+          pathLength += Math.hypot(snake[i - 1][0] - snake[i][0], snake[i - 1][1] - snake[i][1]);
+        if (pathLength <= desiredLength) break;
+        snake.pop();
+      }
+
+      if (food !== null && headCell[0] === food[0] && headCell[1] === food[1]) {
+        score += 1;
+        desiredLength += CELL_SIZE;
+        if (desiredLength >= levelTargetLength(level)) {
+          level += 1;
+          state = "level_clear";
+        } else if (score >= 20 && poison === null) {
+          food = makeFood(snake, maze);
+          poison = makePoison(snake, food, maze);
+        }
+        if (state === "playing") {
+          const blocked = new Set(maze);
+          if (poison) blocked.add(cellKey(poison[0], poison[1]));
+          food = makeFood(snake, blocked);
+        }
+      }
+    }
+  }
+
+  if (state === "start") {
+    drawStartScreen();
+  } else {
+    drawBackground();
+    drawText("SWEET GARDEN", 52, TEXT, WIDTH / 2, 42, true, true);
+    drawBoard();
+    drawText("P pause", 17, MUTED, BOARD_LEFT + BOARD_WIDTH - 90, 93, false);
+    if (state === "paused") drawPause();
+    else if (state === "level_clear") drawLevelClear();
+    else if (state === "game_over") drawGameOver();
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ---------- 键盘控制 ---------- */
+const DIRS = {
+  ArrowUp: [0, -1], w: [0, -1], W: [0, -1],
+  ArrowDown: [0, 1], s: [0, 1], S: [0, 1],
+  ArrowLeft: [-1, 0], a: [-1, 0], A: [-1, 0],
+  ArrowRight: [1, 0], d: [1, 0], D: [1, 0],
+};
+window.addEventListener("keydown", (e) => {
+  const k = e.key;
+  if (k.startsWith("Arrow") || k === " ") e.preventDefault();
+
+  if (k === "Escape") {
+    state = "start";           // 原版为退出程序；网页版改为返回开始界面
+    newGame(0, 1);
+    level = 1;
+    return;
+  }
+  if (state === "start" && k === " ") {
+    newGame(0, 1);
+    desiredLength = SEGMENT_SPACING;
+    state = "playing";
+  } else if (state === "game_over" && k === " ") {
+    newGame(0, 1);
+    desiredLength = SEGMENT_SPACING;
+    level = 1;
+    state = "playing";
+  } else if (state === "level_clear" && (k === " " || k === "Enter")) {
+    newGame(score, level);
+    desiredLength = SEGMENT_SPACING;
+    state = "playing";
+  } else if (state === "playing" && (k === "p" || k === "P")) {
+    state = "paused";
+  } else if (state === "paused" && (k === "p" || k === "P")) {
+    state = "playing";
+  } else if (state === "playing" && DIRS[k]) {
+    const cand = DIRS[k];
+    if (cand[0] !== -direction[0] || cand[1] !== -direction[1]) nextDirection = cand;
+  }
+});
+
+/* 画布自动获得键盘焦点，方便 iframe 内直接操作 */
+function focusCanvas() { canvas.focus(); }
+window.addEventListener("load", focusCanvas);
+canvas.addEventListener("click", focusCanvas);
+canvas.addEventListener("pointerdown", focusCanvas);
+focusCanvas();
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

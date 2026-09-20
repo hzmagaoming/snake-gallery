@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>糖果虫虫 · 十关风景追逐</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #FFF8EF;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #stage {
+    outline: none;
+  }
+  canvas {
+    display: block;
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(52, 68, 84, 0.18);
+  }
+</style>
+</head>
+<body>
+<div id="stage" tabindex="0">
+  <canvas id="game" width="910" height="704"></canvas>
+</div>
+<script>
+'use strict';
+/* 糖果虫虫 · 十关风景追逐 —— 蒋琬婷 的 tkinter 原版忠实移植 */
+const CELL = 24, N = 25, SIZE = 600;
+const W = 910, H = 704, X0 = 36, Y0 = 66;
+const INK = '#344454', SUB = '#6B7E88';
+const LS_BEST = 'sg-l1-jiangwanting-best';
+const LS_UNLOCKED = 'sg-l1-jiangwanting-unlocked';
+// 关卡名、天空、水或地面、远景、植物、点缀、情景
+const SCENES = [
+  ['晨雾丛林','#E5F7E9','#D5EFCF','#A9DCBC','#56A57B','#F7B77D','jungle'],
+  ['芦苇湿地','#E5F8F6','#C9EBE6','#A2D6CE','#6BAC94','#EFC987','wetland'],
+  ['雨后雨林','#D5E8ED','#BFE3D8','#81BCAC','#397F68','#ECA8A9','rain'],
+  ['湖畔黄昏','#FBEBD8','#D3E7E0','#98C1B9','#688E8B','#EEA578','lake'],
+  ['竹海秘径','#E6F1DA','#D6E8D0','#9EBA91','#59866B','#F0BC75','bamboo'],
+  ['珊瑚浅湾','#E4F7FA','#D4F1F7','#A9DAEC','#60B4C8','#FDAE98','coast'],
+  ['萤火森林','#DFE8E5','#C9DCDA','#8FABAC','#46766E','#F7DA7F','firefly'],
+  ['山谷溪流','#E3ECF5','#DBECE5','#A8C8BD','#5F9985','#EAAA82','valley'],
+  ['秋日林地','#F8EBD8','#EADBC2','#CCAE89','#9A795E','#E99C67','autumn'],
+  ['星光沼泽','#EDE9FB','#DFE8F6','#B9CDE4','#8CA8C3','#F8D79D','stars'],
+];
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const key2 = (x, y) => x * 32 + y;
+
+class LandscapeSnake {
+  constructor(canvas) {
+    this.c = canvas.getContext('2d');
+    this.canvas = canvas;
+    const [best, unlocked] = this.load();
+    this.best = best;
+    this.unlocked = unlocked;
+    this.level = 0; this.score = 0; this.lives = 5; this.deaths = 0;
+    this.buttons = {};
+    this.reset();
+    this.lastFrame = performance.now() / 1000;
+    const loop = (t) => { this.frame(t / 1000); requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+  }
+
+  load() {
+    try {
+      const best = Math.max(0, parseInt(localStorage.getItem(LS_BEST), 10) || 0);
+      const unlocked = Math.max(0, Math.min(9, parseInt(localStorage.getItem(LS_UNLOCKED), 10) || 0));
+      return [best, unlocked];
+    } catch (e) { return [0, 0]; }
+  }
+
+  save() {
+    try {
+      localStorage.setItem(LS_BEST, String(this.best));
+      localStorage.setItem(LS_UNLOCKED, String(this.unlocked));
+    } catch (e) { /* ignore */ }
+  }
+
+  reset() {
+    this.me = [[7, 12], [6, 12], [5, 12]];
+    const starts = [[19, 12], [19, 4], [19, 20]];
+    const count = this.level < 3 ? 1 : this.level < 7 ? 2 : 3;
+    this.enemies = starts.slice(0, count).map(([x, y]) => [[x, y], [x + 1, y], [x + 2, y]]);
+    this.enemyDirections = Array(count).fill([-1, 0]);
+    this.enemyDirections = this.enemyDirections.map(() => [-1, 0]);
+    this.hazards = new Set();
+    if (this.level >= 3) {
+      [[11,5],[12,5],[13,5],[11,19],[12,19],[13,19]].forEach(p => this.hazards.add(key2(...p)));
+    }
+    if (this.level >= 6) {
+      [[4,7],[4,8],[20,16],[20,17]].forEach(p => this.hazards.add(key2(...p)));
+    }
+    if (this.level >= 8) {
+      [[9,21],[10,21],[15,3],[16,3]].forEach(p => this.hazards.add(key2(...p)));
+    }
+    this.direction = [1, 0];
+    this.prevMe = this.me.map(p => p.slice());
+    this.prevEnemies = this.enemies.map(e => e.map(p => p.slice()));
+    const now = performance.now() / 1000;
+    this.enemyLastStep = Array(count).fill(now);
+    this.pending = null; this.queued = false;
+    this.eaten = 0;
+    this.state = 'ready';
+    this.reason = '';
+    this.tip = '';
+    this.food = null; this.bonus = null;
+    this.bonusExpiry = 0;
+    this.bonusSpawned = false;
+    this.combo = 0;
+    this.comboUntil = 0;
+    this.freezeUntil = 0;
+    this.notice = ''; this.noticeUntil = 0;
+    this.pauseStarted = 0;
+    this.lastStep = now;
+    this.enemyClock = 0;
+    this.placeFood();
+  }
+
+  freeCell() {
+    const used = new Set(this.me.map(p => key2(...p)));
+    this.hazards.forEach(h => used.add(h));
+    for (const enemy of this.enemies) enemy.forEach(p => used.add(key2(...p)));
+    if (this.bonus) used.add(key2(...this.bonus));
+    if (this.food) used.add(key2(...this.food));
+    const free = [];
+    for (let x = 0; x < N; x++) for (let y = 0; y < N; y++) {
+      if (!used.has(key2(x, y))) free.push([x, y]);
+    }
+    return free[Math.floor(Math.random() * free.length)];
+  }
+
+  placeFood() {
+    // 果实优先出现在玩家前方约 3～7 格内，避开猎手附近。
+    const old = this.food;
+    this.food = null;
+    const used = new Set(this.me.map(p => key2(...p)));
+    this.hazards.forEach(h => used.add(h));
+    for (const enemy of this.enemies) enemy.forEach(p => used.add(key2(...p)));
+    if (this.bonus) used.add(key2(...this.bonus));
+    const [hx, hy] = this.me[0];
+    const options = [];
+    for (let x = 0; x < N; x++) for (let y = 0; y < N; y++) {
+      if (used.has(key2(x, y))) continue;
+      if (this.enemies.some(e => this.distance([x, y], e[0]) <= 2)) continue;
+      const dist = this.distance([x, y], [hx, hy]);
+      if (dist >= 3 && dist <= 7) {
+        const forward = (x - hx) * this.direction[0] + (y - hy) * this.direction[1];
+        const weight = forward > 0 ? 3 : 1;
+        for (let k = 0; k < weight; k++) options.push([x, y]);
+      }
+    }
+    if (options.length) {
+      this.food = options[Math.floor(Math.random() * options.length)];
+    } else {
+      const free = [];
+      const used2 = new Set(this.me.map(p => key2(...p)));
+      this.hazards.forEach(h => used2.add(h));
+      for (const enemy of this.enemies) enemy.forEach(p => used2.add(key2(...p)));
+      if (this.bonus) used2.add(key2(...this.bonus));
+      for (let x = 0; x < N; x++) for (let y = 0; y < N; y++) {
+        if (!used2.has(key2(x, y))) free.push([x, y]);
+      }
+      this.food = free.length ? free[Math.floor(Math.random() * free.length)] : old;
+    }
+  }
+
+  start() {
+    const now = performance.now() / 1000;
+    if ((this.state === 'paused' || this.state === 'help') && this.pauseStarted) {
+      const paused = now - this.pauseStarted;
+      for (const name of ['bonusExpiry', 'noticeUntil', 'comboUntil', 'freezeUntil']) {
+        if (this[name] > this.pauseStarted) this[name] += paused;
+      }
+    }
+    this.pauseStarted = 0;
+    this.state = 'playing';
+    this.lastStep = now;
+    this.enemyClock = 0;
+  }
+
+  pause(mode = 'paused') {
+    this.pauseStarted = performance.now() / 1000;
+    this.state = mode;
+  }
+
+  retry() {
+    this.score = 0;
+    this.reset();
+    this.start();
+  }
+
+  restartRun() {
+    this.level = 0; this.score = 0; this.lives = 5; this.unlocked = 0; this.deaths = 0;
+    this.save();
+    this.reset();
+    this.start();
+  }
+
+  loseLife(reason) {
+    this.lives -= 1;
+    this.deaths += 1;
+    this.reason = reason;
+    const tips = {
+      '被追踪虫抓到了': '技巧：利用穿墙改变路线，别一直沿直线逃跑。',
+      '碰到了危险荆棘': '技巧：荆棘位置固定，先看清红色标记再转弯。',
+      '撞到了自己的身体': '技巧：提前一格转弯，避免钻进自己围成的小圈。',
+    };
+    this.tip = tips[reason] || '技巧：优先吃附近果实，保持开阔的退路。';
+    if (this.deaths >= 4) {
+      this.tip = '技巧：连续吃 3 颗能冻住追兵，趁机拿到附近的生命心。';
+    }
+    this.bonus = null;
+    if (this.lives <= 0) {
+      this.level = 0; this.unlocked = 0;
+      this.save();
+      this.state = 'gameover';
+    } else {
+      this.state = 'hurt';
+    }
+  }
+
+  continueAfterHit() {
+    this.reset();
+    this.start();
+  }
+
+  nextLevel() {
+    if (this.level === 9) {
+      this.state = 'victory';
+    } else {
+      this.level += 1;
+      this.unlocked = Math.max(this.unlocked, this.level);
+      this.save();
+      this.reset();
+      this.start();
+      const now = performance.now() / 1000;
+      let message;
+      if (this.level === 3) message = '新危险：红色荆棘不能碰！还有第二条追踪虫';
+      else if (this.level === 6) message = '小心！本关新增了荆棘，先观察红色标记';
+      else if (this.level === 7) message = '第三条追踪虫出现！利用穿墙和冻结争取空间';
+      else if (this.level === 8) message = '最后几关荆棘更多，别贪心冲进死角';
+      else message = `第 ${this.level + 1} 关开始！找附近的果实，留意追踪虫`;
+      this.notice = message; this.noticeUntil = now + 4;
+    }
+  }
+
+  key(k) {
+    const dirs = {
+      arrowup: [0, -1], w: [0, -1],
+      arrowdown: [0, 1], s: [0, 1],
+      arrowleft: [-1, 0], a: [-1, 0],
+      arrowright: [1, 0], d: [1, 0],
+    };
+    if (k in dirs && (this.state === 'ready' || this.state === 'playing')) {
+      const d = dirs[k];
+      if (!this.queued && !(d[0] === -this.direction[0] && d[1] === -this.direction[1])) {
+        this.pending = d; this.queued = true;
+        if (this.state === 'ready') this.start();
+      }
+    } else if (k === ' ' || k === 'spacebar' || k === 'p') {
+      if (this.state === 'ready' || this.state === 'paused' || this.state === 'help') this.start();
+      else if (this.state === 'playing') this.pause();
+      else if (this.state === 'clear') this.nextLevel();
+      else if (this.state === 'hurt') this.continueAfterHit();
+      else if (this.state === 'gameover') this.restartRun();
+      else this.retry();
+    } else if (k === 'enter' && this.state === 'clear') {
+      this.nextLevel();
+    } else if (k === 'r') {
+      this.restartRun();
+    } else if (k === 'h') {
+      if (this.state === 'playing') this.pause('help');
+      else if (this.state === 'help') this.start();
+    } else if (k === 'escape' && this.state === 'playing') {
+      this.pause();
+    }
+  }
+
+  click(x, y) {
+    for (const [name, box] of Object.entries(this.buttons)) {
+      const [x1, y1, x2, y2] = box;
+      if (x1 <= x && x <= x2 && y1 <= y && y <= y2) {
+        if (name === 'main') {
+          if (this.state === 'playing') this.pause();
+          else if (this.state === 'clear') this.nextLevel();
+          else if (this.state === 'hurt') this.continueAfterHit();
+          else if (this.state === 'gameover') this.restartRun();
+          else if (this.state === 'victory') this.restartRun();
+          else this.start();
+        } else if (name === 'retry') {
+          this.restartRun();
+        }
+        // 关卡地图仅展示当前挑战进度；失去所有生命必须重头开始。
+        break;
+      }
+    }
+  }
+
+  move(p, d) { return [(p[0] + d[0] + N) % N, (p[1] + d[1] + N) % N]; }
+
+  distance(a, b) {
+    const dx = Math.abs(a[0] - b[0]), dy = Math.abs(a[1] - b[1]);
+    return Math.min(dx, N - dx) + Math.min(dy, N - dy);
+  }
+
+  enemyChoice(index) {
+    const enemy = this.enemies[index];
+    const direction = this.enemyDirections[index];
+    const choices = [];
+    const occupied = new Set(this.hazards);
+    for (let i = 0; i < this.enemies.length; i++) {
+      const other = this.enemies[i];
+      const segs = i === index ? other.slice(0, -1) : other;
+      segs.forEach(p => occupied.add(key2(...p)));
+    }
+    const meBody = new Set(this.me.slice(1).map(p => key2(...p)));
+    for (const d of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      if (d[0] === -direction[0] && d[1] === -direction[1]) continue;
+      const p = this.move(enemy[0], d);
+      if (occupied.has(key2(...p)) || meBody.has(key2(...p))) continue;
+      choices.push([this.distance(p, this.me[0]) + Math.random() * 0.12, d, p]);
+    }
+    if (!choices.length) return [null, null];
+    choices.sort((a, b) => a[0] - b[0]);
+    return [choices[0][1], choices[0][2]];
+  }
+
+  awardPoints(points, now) {
+    const before = Math.floor(this.score / 50);
+    this.score += points;
+    const earned = Math.floor(this.score / 50) - before;
+    if (earned && this.lives < 8) {
+      this.lives = Math.min(8, this.lives + earned);
+      this.notice = '积分达到 50 的倍数，奖励一条命！'; this.noticeUntil = now + 3;
+    }
+    if (this.score > this.best) {
+      this.best = this.score;
+      this.save();
+    }
+  }
+
+  stepMe(now) {
+    this.prevMe = this.me.map(p => p.slice());
+    if (this.pending !== null) { this.direction = this.pending; this.pending = null; }
+    this.queued = false;
+    const head = this.move(this.me[0], this.direction);
+    const eating = this.food && head[0] === this.food[0] && head[1] === this.food[1];
+    const body = eating ? this.me : this.me.slice(0, -1);
+    if (body.some(p => p[0] === head[0] && p[1] === head[1])) {
+      this.loseLife('撞到了自己的身体');
+      return;
+    }
+    if (this.hazards.has(key2(...head))) {
+      this.loseLife('碰到了危险荆棘');
+      return;
+    }
+    for (const enemy of this.enemies) {
+      if (enemy.some(p => p[0] === head[0] && p[1] === head[1])) {
+        this.loseLife('被追踪虫抓到了');
+        return;
+      }
+    }
+    this.me.unshift(head);
+    if (eating) {
+      this.eaten += 1;
+      this.combo = now < this.comboUntil ? this.combo + 1 : 1;
+      this.comboUntil = now + 8;
+      this.awardPoints(10, now);
+      if (this.combo >= 3) {
+        this.combo = 0;
+        this.freezeUntil = now + 3.5;
+        this.awardPoints(20, now);
+        this.notice = '连吃 3 颗！+20 分，追踪虫冻结 3.5 秒'; this.noticeUntil = now + 3;
+      }
+      const goal = 3 + Math.floor(this.level / 3);
+      if (this.eaten >= goal) {
+        this.state = 'clear';
+        this.unlocked = Math.max(this.unlocked, Math.min(9, this.level + 1));
+        this.save();
+        return;
+      }
+      this.placeFood();
+      if (!this.bonusSpawned) {
+        this.bonusSpawned = true;
+        const usedSet = new Set(this.me.map(p => key2(...p)));
+        this.hazards.forEach(h => usedSet.add(h));
+        if (this.food) usedSet.add(key2(...this.food));
+        const nearby = [];
+        for (let x = 0; x < N; x++) for (let y = 0; y < N; y++) {
+          const d = this.distance([x, y], this.me[0]);
+          if (d < 2 || d > 6) continue;
+          if (usedSet.has(key2(x, y))) continue;
+          if (this.enemies.some(e => e.some(p => p[0] === x && p[1] === y))) continue;
+          nearby.push([x, y]);
+        }
+        this.bonus = nearby.length ? nearby[Math.floor(Math.random() * nearby.length)] : this.freeCell();
+        this.bonusExpiry = now + 12;
+        this.notice = '生命心出现！碰到它可直接增加一条命'; this.noticeUntil = now + 3;
+      }
+    } else {
+      this.me.pop();
+    }
+    if (this.bonus && head[0] === this.bonus[0] && head[1] === this.bonus[1]) {
+      this.bonus = null;
+      if (this.lives < 8) {
+        this.lives += 1;
+        this.notice = '拾取生命心：+1 条命！'; this.noticeUntil = now + 3;
+      } else {
+        this.awardPoints(10, now);
+        this.notice = '生命已满：生命心转为 +10 分！'; this.noticeUntil = now + 3;
+      }
+    }
+  }
+
+  stepEnemy(now, index) {
+    const [d, p] = this.enemyChoice(index);
+    if (d === null) return;
+    this.enemyDirections[index] = d;
+    this.prevEnemies[index] = this.enemies[index].map(q => q.slice());
+    this.enemyLastStep[index] = now;
+    const enemy = this.enemies[index];
+    enemy.unshift(p);
+    enemy.pop();
+    if (this.me.some(q => q[0] === p[0] && q[1] === p[1])) this.loseLife('被追踪虫抓到了');
+    // 追踪虫不能偷走玩家的果实。
+    // 追踪虫也不会抢走生命心。
+  }
+
+  frame(now) {
+    const dt = Math.min(0.08, now - this.lastFrame);
+    this.lastFrame = now;
+    if (this.state === 'playing') {
+      const playerSpeed = Math.max(0.11, 0.205 - this.level * 0.008);
+      const enemySpeed = Math.max(0.15, 0.285 - this.level * 0.010);
+      this.enemyClock += dt;
+      if (this.bonus && now >= this.bonusExpiry) this.bonus = null;
+      if (this.combo && now >= this.comboUntil) this.combo = 0;
+      if (this.freezeUntil && now >= this.freezeUntil) {
+        this.freezeUntil = 0;
+        this.notice = '冻结结束：追踪虫重新行动，小心！'; this.noticeUntil = now + 2.7;
+      }
+      const playerDue = now - this.lastStep >= playerSpeed;
+      if (now < this.freezeUntil) this.enemyClock = 0;
+      const enemyDue = this.enemyClock >= enemySpeed && now >= this.freezeUntil;
+      const oldPlayer = this.me[0].slice();
+      const oldHeads = this.enemies.map(e => e[0].slice());
+      if (playerDue) {
+        this.stepMe(now);
+        this.lastStep = now;
+      }
+      if (this.state === 'playing' && enemyDue) {
+        for (let i = 0; i < this.enemies.length; i++) {
+          if (this.state !== 'playing') break;
+          this.stepEnemy(now, i);
+        }
+        this.enemyClock = 0;
+      }
+      if (this.state === 'playing' && playerDue && enemyDue) {
+        for (let i = 0; i < oldHeads.length; i++) {
+          if (this.me[0][0] === oldHeads[i][0] && this.me[0][1] === oldHeads[i][1] &&
+              this.enemies[i][0][0] === oldPlayer[0] && this.enemies[i][0][1] === oldPlayer[1]) {
+            this.loseLife('被追踪虫抓到了');
+            break;
+          }
+        }
+      }
+    }
+    this.draw(now);
+  }
+
+  /* ---------- 绘制辅助 ---------- */
+
+  oval(x, y, rx, ry, color, outline) {
+    const c = this.c;
+    c.beginPath();
+    c.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+    c.fillStyle = color;
+    c.fill();
+    if (outline) { c.strokeStyle = outline; c.stroke(); }
+  }
+
+  box(x1, y1, x2, y2, color, r = 12) {
+    const c = this.c;
+    c.fillStyle = color;
+    c.fillRect(x1 + r, y1, x2 - x1 - 2 * r, y2 - y1);
+    c.fillRect(x1, y1 + r, x2 - x1, y2 - y1 - 2 * r);
+    for (const x of [x1 + r, x2 - r]) {
+      for (const y of [y1 + r, y2 - r]) this.oval(x, y, r, r, color);
+    }
+  }
+
+  text(x, y, s, size = 12, color = INK, bold = false, anchor = 'nw') {
+    const c = this.c;
+    c.fillStyle = color;
+    c.font = `${bold ? 'bold ' : ''}${size}px "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif`;
+    if (anchor === 'center') {
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+    } else {
+      c.textAlign = 'left'; c.textBaseline = 'top';
+    }
+    c.fillText(s, x, y);
+  }
+
+  arcTop(cx, cy, rx, ry, color, width) {
+    // tkinter create_arc(start=195, extent=145)：横跨椭圆上方的弧线
+    const c = this.c;
+    c.beginPath();
+    c.ellipse(cx, cy, rx, ry, 0, Math.PI * 165 / 180, Math.PI * 20 / 180, true);
+    c.strokeStyle = color;
+    c.lineWidth = width;
+    c.stroke();
+    c.lineWidth = 1;
+  }
+
+  scenery(now) {
+    /* 粉彩风景插画：逐关更换地形、植物与装饰。 */
+    const c = this.c;
+    const [name, sky, ground, distant, plants, accent, kind] = SCENES[this.level];
+    c.fillStyle = sky;
+    c.fillRect(X0, Y0, SIZE, SIZE);
+    // 柔软的圆丘与水面，不遮挡游戏中的蛇。
+    for (const [x, y, rx, ry, col] of [
+      [X0 + 50, Y0 + 472, 112, 70, distant],
+      [X0 + 212, Y0 + 488, 140, 76, ground],
+      [X0 + 416, Y0 + 469, 153, 82, distant],
+      [X0 + 565, Y0 + 495, 120, 75, ground],
+    ]) this.oval(x, y, rx, ry, col);
+    if (['wetland', 'lake', 'coast', 'valley', 'stars'].includes(kind)) {
+      const water = kind !== 'stars' ? '#B8E7E9' : '#BDD3E9';
+      c.beginPath();
+      c.moveTo(X0, Y0 + 531);
+      c.lineTo(X0 + 125, Y0 + 512);
+      c.lineTo(X0 + 268, Y0 + 533);
+      c.lineTo(X0 + 446, Y0 + 501);
+      c.lineTo(X0 + SIZE, Y0 + 525);
+      c.lineTo(X0 + SIZE, Y0 + SIZE);
+      c.lineTo(X0, Y0 + SIZE);
+      c.closePath();
+      c.fillStyle = water;
+      c.fill();
+      for (let i = 0; i < 8; i++) {
+        const px = X0 + 25 + i * 77, py = Y0 + 545 + (i % 3) * 14;
+        this.arcTop(px + 19.5, py + 5, 19.5, 5, '#ECFAF5', 2);
+      }
+    }
+    const rng = mulberry32(this.level * 971 + 123);
+    const ri = (a, b) => a + Math.floor(rng() * (b - a + 1));
+    // 插画元素集中在两侧，保留中间的移动区域。
+    for (let i = 0; i < 23; i++) {
+      const px = X0 + (rng() < 0.5 ? ri(12, 83) : ri(516, 587));
+      const py = Y0 + ri(45, 558);
+      if (kind === 'bamboo') {
+        c.strokeStyle = plants; c.lineWidth = 3;
+        c.beginPath(); c.moveTo(px, py - 19); c.lineTo(px, py + 18); c.stroke();
+        this.oval(px - 7, py - 5, 8, 3, plants);
+        this.oval(px + 7, py + 5, 8, 3, plants);
+      } else if (['wetland', 'lake', 'stars'].includes(kind)) {
+        c.strokeStyle = plants; c.lineWidth = 2;
+        c.beginPath(); c.moveTo(px, py + 12); c.lineTo(px, py - 15); c.stroke();
+        this.oval(px, py - 19, 3, 9, accent);
+      } else if (['coast', 'valley'].includes(kind)) {
+        this.oval(px, py, 14, 8, plants);
+        this.oval(px + 5, py - 5, 8, 5, distant);
+      } else {
+        c.strokeStyle = plants; c.lineWidth = 3;
+        c.beginPath(); c.moveTo(px, py + 16); c.lineTo(px, py - 8); c.stroke();
+        this.oval(px - 8, py - 13, 12, 11, plants);
+        this.oval(px + 8, py - 13, 12, 11, plants);
+        this.oval(px, py - 22, 11, 11, distant);
+      }
+    }
+    for (let i = 0; i < 34; i++) {
+      const px = X0 + ri(10, 590), py = Y0 + ri(16, 565);
+      const color = i % 3 === 0 ? accent : '#FFFFFF';
+      const r = i % 3 === 0 ? 2.5 : 2;
+      this.oval(px, py, r, r, color);
+    }
+    if (kind === 'firefly' || kind === 'stars') {
+      for (let i = 0; i < 14; i++) {
+        const px = X0 + ri(22, 572), py = Y0 + ri(20, 440);
+        this.oval(px, py, 3, 3, '#FFF3BE');
+      }
+    }
+    c.lineWidth = 1;
+  }
+
+  drawSnake(segments, body, head, look, previous = null, alpha = 1) {
+    const c = this.c;
+    const positions = [];
+    for (let i = 0; i < segments.length; i++) {
+      const [x, y] = segments[i];
+      if (previous && i < previous.length) {
+        const [px, py] = previous[i];
+        if (Math.abs(x - px) > N / 2 || Math.abs(y - py) > N / 2) {
+          positions.push([x, y]); // 穿越边界时直接从另一侧出现
+        } else {
+          positions.push([px + (x - px) * alpha, py + (y - py) * alpha]);
+        }
+      } else {
+        positions.push([x, y]);
+      }
+    }
+    for (let i = positions.length - 1; i >= 0; i--) {
+      const [x, y] = positions[i];
+      const cx = X0 + x * CELL + 12, cy = Y0 + y * CELL + 12;
+      // 连缀的圆节身体，保持参考图中软软的虫虫轮廓。
+      if (i < segments.length - 1) {
+        const [x2, y2] = positions[i + 1];
+        if (Math.abs(x - x2) + Math.abs(y - y2) < 1.2) {
+          c.strokeStyle = body;
+          c.lineWidth = 17;
+          c.lineCap = 'round';
+          c.beginPath();
+          c.moveTo(cx, cy);
+          c.lineTo(X0 + x2 * CELL + 12, Y0 + y2 * CELL + 12);
+          c.stroke();
+        }
+      }
+      if (i) {
+        this.oval(cx, cy + 1, 11, 11, body);
+        if (i % 4 === 0) this.oval(cx - 3, cy - 4, 2, 2, '#F1FFF4');
+      } else {
+        const [dx, dy] = look;
+        for (const side of [-1, 1]) {
+          const ax = cx + side * 7 - dx * 3, ay = cy - 11 - dy * 3;
+          c.strokeStyle = body; c.lineWidth = 2; c.lineCap = 'round';
+          c.beginPath();
+          c.moveTo(cx + side * 5, cy - 6);
+          c.lineTo(ax, ay);
+          c.stroke();
+          this.oval(ax, ay, 2.8, 2.8, head === '#49AE80' ? '#FFD7D9' : '#FFE6CF');
+        }
+        this.oval(cx, cy, 12.5, 12.5, head);
+        for (const ex of [-5, 5]) {
+          this.oval(cx + ex, cy - 3, 3.9, 4.8, '#FFFFFF');
+          this.oval(cx + ex + dx, cy - 2 + dy, 2, 2.6, '#342F47');
+          this.oval(cx + ex - 1, cy - 5, 1, 1, '#FFFFFF');
+        }
+        this.oval(cx - 9, cy + 4, 2.8, 1.8, '#F7A6B6');
+        this.oval(cx + 9, cy + 4, 2.8, 1.8, '#F7A6B6');
+        this.arcTop(cx, cy + 3.5, 4, 4.5, '#A16A78', 2);
+      }
+    }
+    c.lineWidth = 1;
+  }
+
+  button(name, x, y, w, label, color) {
+    this.buttons[name] = [x, y, x + w, y + 42];
+    this.box(x, y, x + w, y + 42, color, 12);
+    this.text(x + w / 2, y + 21, label, 13, '#FFFFFF', true, 'center');
+  }
+
+  draw(now) {
+    const c = this.c;
+    this.buttons = {};
+    const [name, sky, ground, distant, plants, accent, kind] = SCENES[this.level];
+    // 背景
+    c.fillStyle = '#FFF8EF';
+    c.fillRect(0, 0, W, H);
+    for (const [x, y, r, col] of [[12, 13, 24, '#FFD3DF'], [583, 30, 16, '#CBEEDA'],
+                                  [888, 62, 35, '#FCE3B6'], [21, 682, 39, '#D9E9FF']]) {
+      this.oval(x, y, r, r, col);
+    }
+    this.text(36, 17, '糖 果 虫 虫', 22, '#E85D93', true);
+    this.text(205, 25, 'SCENIC ADVENTURE  /  风景追逐', 10, '#AC8195', true);
+    this.scenery(now);
+    for (const h of this.hazards) {
+      const hx = Math.floor(h / 32), hy = h % 32;
+      const cx = X0 + hx * CELL + 12, cy = Y0 + hy * CELL + 12;
+      this.oval(cx, cy, 10, 10, '#FFE4DB');
+      this.text(cx, cy, '✕', 16, '#DE6470', true, 'center');
+    }
+    if (this.food) {
+      const [x, y] = this.food;
+      const fx = X0 + x * CELL + 12, fy = Y0 + y * CELL + 12;
+      const r = 10 + Math.sin(now * 6) * 1.2;
+      this.oval(fx, fy, r + 2, r + 2, '#FFE7BD');
+      this.oval(fx, fy, r, r, '#FFAF71');
+      this.oval(fx - 4, fy - 4, 2, 2, '#FFFFFF');
+    }
+    if (this.bonus) {
+      const [x, y] = this.bonus;
+      const fx = X0 + x * CELL + 12, fy = Y0 + y * CELL + 12;
+      this.oval(fx, fy, 12, 12, '#FFE2E9');
+      this.text(fx, fy, '♥', 17, '#E76488', true, 'center');
+    }
+    for (let i = 0; i < this.enemies.length; i++) {
+      const colors = [['#F19388', '#E77E79'], ['#B89EE8', '#9E7CCC'], ['#FFBA77', '#F2A053']];
+      const [body, head] = colors[i];
+      const enemyInterval = Math.max(0.15, 0.285 - this.level * 0.010);
+      const alpha = Math.min(1, (now - this.enemyLastStep[i]) / enemyInterval);
+      this.drawSnake(this.enemies[i], body, head, this.enemyDirections[i], this.prevEnemies[i], alpha);
+    }
+    const playerInterval = Math.max(0.11, 0.205 - this.level * 0.008);
+    const alpha = Math.min(1, (now - this.lastStep) / playerInterval);
+    this.drawSnake(this.me, '#83D5A0', '#49AE80', this.direction, this.prevMe, alpha);
+    // 侧栏
+    this.box(654, Y0, 875, Y0 + SIZE, '#FFFFFF', 20);
+    this.text(673, 84, `第 ${this.level + 1} / 10 关`, 18, '#E973A5', true);
+    this.text(673, 118, name, 16, INK, true);
+    this.text(673, 150, `绿色是你 · ${this.enemies.length} 条虫子追你`, 11, '#896F8C');
+    const goal = 3 + Math.floor(this.level / 3);
+    this.text(673, 185, '关卡进度', 12, '#91798F');
+    this.box(673, 211, 850, 225, '#F3EAF0', 7);
+    if (this.eaten) this.box(673, 211, 673 + 177 * this.eaten / goal, 225, '#FF84A7', 7);
+    this.text(673, 235, `${this.eaten} / ${goal} 颗果实`, 11, '#896F8C');
+    this.text(673, 271, '当前得分', 12, '#91798F');
+    this.text(673, 296, String(this.score).padStart(4, '0'), 28, '#F1729C', true);
+    this.text(673, 343, `最高纪录  ${String(this.best).padStart(4, '0')}`, 12, '#9A6E91', true);
+    this.text(673, 366, `生命  ${this.lives} / 8  ♥`, 12, '#E97693', true);
+    this.text(673, 388, '关卡地图', 12, INK, true);
+    for (let i = 0; i < 10; i++) {
+      const x = 673 + (i % 5) * 36, y = 416 + Math.floor(i / 5) * 39;
+      const open = i <= this.unlocked;
+      const color = i === this.level ? '#FF84A7' : open ? '#D9EEE4' : '#EEE8EE';
+      this.box(x, y, x + 31, y + 31, color, 8);
+      this.text(x + 15, y + 15, String(i + 1), 10,
+        i === this.level ? '#FFFFFF' : open ? INK : '#B5AAB7', true, 'center');
+      this.buttons[`stage${i}`] = [x, y, x + 31, y + 31];
+    }
+    const labels = {
+      ready: '开始探险', playing: '暂停一下', paused: '继续游戏', help: '继续游戏',
+      clear: '进入下一关', hurt: '继续挑战', gameover: '从第一关重来', victory: '重新探险',
+    };
+    this.button('main', 673, 534, 177, labels[this.state], '#FF84A7');
+    this.button('retry', 673, 585, 177, '从第一关重新挑战', '#ADA0D9');
+    if (this.state === 'playing' && now < this.noticeUntil) {
+      this.box(X0 + 116, Y0 + 19, X0 + SIZE - 116, Y0 + 58, '#FFFFFF', 12);
+      this.text(X0 + SIZE / 2, Y0 + 38, this.notice, 12, '#916C86', true, 'center');
+    }
+    if (this.state === 'playing' && now < this.freezeUntil) {
+      this.text(673, 489, `❄ 追踪虫冻结 ${(this.freezeUntil - now).toFixed(1)} 秒`, 10, '#789BC8');
+    } else if (this.state === 'playing' && this.combo) {
+      this.text(673, 489, `连吃 ${this.combo}/3 · 还剩 ${Math.max(0, this.comboUntil - now).toFixed(1)} 秒`, 10, '#BE9160');
+    } else if (this.bonus && this.state === 'playing') {
+      this.text(673, 489, '♥ 生命心限时出现，碰到可加一条命', 10, '#BE9160');
+    } else {
+      this.text(673, 489, '♥ 每累计 50 分加一条命（最多 8 条）', 10, '#BE9160');
+    }
+    this.text(36, 678, '方向键 / WASD 移动 · 空格暂停 · H 查看玩法 · R 从头挑战 · 红色荆棘危险', 11, '#997C96');
+    this.text(660, 678, 'by 蒋琬婷', 10, '#B9A5B5');
+    if (this.state !== 'playing') {
+      c.fillStyle = 'rgba(255,255,255,0.55)';
+      c.fillRect(X0 + 1, Y0 + 1, SIZE - 2, SIZE - 2);
+      const titles = {
+        ready: '走进 ' + name, paused: '休息一下～', clear: '过关啦！',
+        hurt: '失去一颗心', gameover: '挑战结束', victory: '十关通关啦！', help: '玩法说明',
+      };
+      const notes = {
+        ready: '绿色虫虫由你控制 · 粉色虫虫会追你',
+        paused: '空格继续游戏', clear: '按空格或回车进入下一关',
+        hurt: `${this.reason} · 还剩 ${this.lives} 条命，空格再试`,
+        gameover: '生命已用完 · 空格从第一关重新开始',
+        victory: '十段风景都探索完了！', help: '按 H 或空格返回游戏',
+      };
+      const mid = X0 + SIZE / 2;
+      this.oval(mid, Y0 + SIZE / 2 - 105, 31, 31, '#A1E5AF');
+      for (const d of [-11, 11]) this.oval(mid + d, Y0 + SIZE / 2 - 112, 4, 5, '#433754');
+      this.text(mid, Y0 + SIZE / 2 - 20, titles[this.state], 28, '#E85D93', true, 'center');
+      this.text(mid, Y0 + SIZE / 2 + 31, notes[this.state], 13, INK, false, 'center');
+      if (this.state === 'hurt' && this.deaths >= 2) {
+        this.text(mid, Y0 + SIZE / 2 + 67, this.tip, 12, '#A26373', true, 'center');
+      }
+      if (this.state === 'ready' || this.state === 'clear' || this.state === 'help') {
+        const hazardNote = this.hazards.size ? '红色荆棘碰到会扣命' : '本关没有危险荆棘';
+        this.text(mid, Y0 + SIZE / 2 + 57, `${this.enemies.length} 条追踪虫 · ${hazardNote} · 初始 5 条命`, 11, '#A26373', false, 'center');
+      }
+      if (this.state === 'ready' || this.state === 'help') {
+        this.text(mid, Y0 + SIZE / 2 + 69, '方向键 / WASD 移动 · 吃果实即可过关', 12, INK, false, 'center');
+        this.text(mid, Y0 + SIZE / 2 + 94, '粉色生命心直接加命；每累计 50 分也会加命', 12, INK, false, 'center');
+        this.text(mid, Y0 + SIZE / 2 + 119, '8 秒内连吃 3 颗：+20 分，冻结追踪虫 3.5 秒', 12, INK, false, 'center');
+        this.text(mid, Y0 + SIZE / 2 + 144, '最多 8 条命 · 穿过边界可从对侧出现', 12, INK, false, 'center');
+      }
+    }
+  }
+}
+
+const stage = document.getElementById('stage');
+const canvas = document.getElementById('game');
+const game = new LandscapeSnake(canvas);
+
+stage.addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) {
+    e.preventDefault();
+  }
+  game.key(k);
+});
+canvas.addEventListener('mousedown', (e) => {
+  stage.focus();
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * (W / rect.width);
+  const y = (e.clientY - rect.top) * (H / rect.height);
+  game.click(x, y);
+});
+
+function fit() {
+  const scale = Math.min(window.innerWidth / W, window.innerHeight / H) * 0.985;
+  canvas.style.width = (W * scale) + 'px';
+  canvas.style.height = (H * scale) + 'px';
+}
+window.addEventListener('resize', fit);
+fit();
+stage.focus();
+</script>
+</body>
+</html>

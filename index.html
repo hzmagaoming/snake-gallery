@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>突发事件模拟仿真游戏 · 课堂作品集</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-deco" aria-hidden="true">🐍 🎮 🌟 🍎 🎨</div>
+  <h1>突发事件模拟仿真游戏</h1>
+  <p class="subtitle">仿真模拟创新教学 · 课堂游戏作品展</p>
+</header>
+
+<div class="layout">
+
+  <!-- 左栏：讲次导航 -->
+  <nav class="lecture-nav" id="lectureNav" aria-label="讲次导航"></nav>
+
+  <!-- 中栏：游戏卡片墙 + 播放器 -->
+  <main class="main-area">
+    <div class="lecture-banner" id="lectureBanner"></div>
+
+    <div class="player-wrap hidden" id="playerWrap">
+      <div class="player-toolbar">
+        <span class="player-title" id="playerTitle"></span>
+        <button class="btn-close" id="btnClosePlayer">✕ 收起游戏</button>
+      </div>
+      <iframe id="gameFrame" title="游戏播放器" allow="autoplay"></iframe>
+    </div>
+
+    <div class="cards-grid" id="cardsGrid"></div>
+  </main>
+
+  <!-- 右栏：点赞排行榜 -->
+  <aside class="ranking-panel" aria-label="点赞排行榜">
+    <h2 class="ranking-title">🏆 点赞排名</h2>
+    <ol class="ranking-list" id="rankingList"></ol>
+    <p class="ranking-hint">点右边的小红心<br>为喜欢的游戏打 call 💖</p>
+  </aside>
+
+</div>
+
+<div class="like-toast" id="likeToast">+1 💖</div>
+
+<script src="js/main.js"></script>
+</body>
+</html>

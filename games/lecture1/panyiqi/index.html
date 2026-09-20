@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>贪吃蛇 · Snake — by 潘祎琦</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #0f0c29;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #wrap {
+    /* 逻辑尺寸：750x600 画布 + 58px 信息栏 + 左右各14px 边距 */
+    width: 778px;
+    transform-origin: center center;
+    outline: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #hud {
+    height: 58px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 26px;
+    box-sizing: border-box;
+    background: #0f0c29;
+  }
+  .hud-group {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .hud-label {
+    color: #8b9dc3;
+    font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    font-size: 10px;
+  }
+  .hud-value {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 20px;
+    font-weight: bold;
+  }
+  #score { color: #22d3ee; }
+  #best  { color: #a78bfa; }
+  #board {
+    display: block;
+    margin: 0 14px 14px 14px;
+    background: #1a1642;
+  }
+  #credit {
+    position: absolute;
+    right: 10px;
+    bottom: 6px;
+    color: #8b9dc3;
+    opacity: 0.65;
+    font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    font-size: 10px;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="wrap" tabindex="0">
+  <div id="hud">
+    <div class="hud-group">
+      <span class="hud-label">分数</span>
+      <span class="hud-value" id="score">0</span>
+    </div>
+    <div class="hud-group">
+      <span class="hud-label">最高</span>
+      <span class="hud-value" id="best">0</span>
+    </div>
+  </div>
+  <canvas id="board" width="750" height="600"></canvas>
+  <div id="credit">by 潘祎琦</div>
+</div>
+
+<script>
+'use strict';
+(function () {
+  // ---------------- 配置（与原版一致） ----------------
+  var CELL = 25;
+  var COLS = 30, ROWS = 24;
+  var WIDTH = COLS * CELL, HEIGHT = ROWS * CELL;
+
+  var BG       = '#0f0c29';
+  var BOARD_BG = '#1a1642';
+  var GRID     = '#252058';
+  var TEXT     = '#f1f5f9';
+  var SUB      = '#8b9dc3';
+  var ACCENT   = '#22d3ee';
+  var ACCENT2  = '#a78bfa';
+
+  // 蛇身渐变：翠绿 → 青色 → 紫色
+  var SNAKE_C1 = [52, 211, 153];
+  var SNAKE_C2 = [34, 211, 238];
+  var SNAKE_C3 = [167, 139, 250];
+  var FOOD_RGB = [251, 113, 133];
+  var BOARD_RGB = [26, 22, 66];
+
+  var BEST_KEY = 'sg-l1-panyiqi-best';
+
+  function mix(c1, c2, t) {
+    return [
+      Math.round(c1[0] + (c2[0] - c1[0]) * t),
+      Math.round(c1[1] + (c2[1] - c1[1]) * t),
+      Math.round(c1[2] + (c2[2] - c1[2]) * t)
+    ];
+  }
+  function hexc(c) {
+    function h(v) { return ('0' + v.toString(16)).slice(-2); }
+    return '#' + h(c[0]) + h(c[1]) + h(c[2]);
+  }
+  function snakeColor(t) {
+    t = Math.max(0, Math.min(1, t));
+    if (t <= 0.5) return hexc(mix(SNAKE_C1, SNAKE_C2, t * 2));
+    return hexc(mix(SNAKE_C2, SNAKE_C3, (t - 0.5) * 2));
+  }
+
+  // ---------------- DOM ----------------
+  var wrap = document.getElementById('wrap');
+  var canvas = document.getElementById('board');
+  var ctx = canvas.getContext('2d');
+  var scoreEl = document.getElementById('score');
+  var bestEl = document.getElementById('best');
+
+  // ---------------- 状态 ----------------
+  var snake, direction, queue, food;
+  var score = 0;
+  var best = 0;
+  try {
+    best = parseInt(window.localStorage.getItem(BEST_KEY), 10) || 0;
+  } catch (e) { best = 0; }
+  var state = 'ready'; // ready | running | paused | over | win
+  var stepMs = 115;
+  var acc = 0;
+  var lastTime = null;
+
+  function saveBest() {
+    try { window.localStorage.setItem(BEST_KEY, String(best)); } catch (e) {}
+  }
+
+  function reset() {
+    var cx = Math.floor(COLS / 2), cy = Math.floor(ROWS / 2);
+    snake = [[cx + 1, cy], [cx, cy], [cx - 1, cy]];
+    direction = [1, 0];
+    queue = [];
+    score = 0;
+    state = 'ready';
+    stepMs = 115;
+    acc = 0;
+    placeFood();
+    scoreEl.textContent = '0';
+    bestEl.textContent = String(best);
+  }
+
+  function restart() {
+    reset();
+    state = 'running';
+  }
+
+  function togglePause() {
+    if (state === 'running') state = 'paused';
+    else if (state === 'paused') state = 'running';
+    else if (state === 'ready') state = 'running';
+  }
+
+  function placeFood() {
+    var occupied = {};
+    for (var i = 0; i < snake.length; i++) occupied[snake[i][0] + ',' + snake[i][1]] = true;
+    var free = [];
+    for (var y = 0; y < ROWS; y++)
+      for (var x = 0; x < COLS; x++)
+        if (!occupied[x + ',' + y]) free.push([x, y]);
+    if (free.length) {
+      food = free[Math.floor(Math.random() * free.length)];
+    } else {
+      food = null;
+      state = 'win';
+    }
+  }
+
+  // ---------------- 操作 ----------------
+  function turn(dx, dy) {
+    if (state === 'ready') state = 'running';
+    if (state !== 'running') return;
+
+    var last = queue.length ? queue[queue.length - 1] : direction;
+    if (dx === last[0] && dy === last[1]) return;
+    if (dx === -last[0] && dy === -last[1]) return;
+    if (queue.length < 2) queue.push([dx, dy]);
+  }
+
+  function step() {
+    if (queue.length) direction = queue.shift();
+
+    var hx = snake[0][0], hy = snake[0][1];
+    var nx = hx + direction[0], ny = hy + direction[1];
+
+    if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) return gameOver();
+
+    var willEat = food !== null && nx === food[0] && ny === food[1];
+    var body = willEat ? snake : snake.slice(0, snake.length - 1);
+    for (var i = 0; i < body.length; i++) {
+      if (body[i][0] === nx && body[i][1] === ny) return gameOver();
+    }
+
+    snake.unshift([nx, ny]);
+    if (willEat) {
+      score += 10;
+      scoreEl.textContent = String(score);
+      stepMs = Math.max(55, stepMs - 2);
+      placeFood();
+    } else {
+      snake.pop();
+    }
+  }
+
+  function gameOver() {
+    state = 'over';
+    if (score > best) {
+      best = score;
+      saveBest();
+    }
+    bestEl.textContent = String(best);
+  }
+
+  // ---------------- 主循环：固定时间步长累加器 ----------------
+  function tick(t) {
+    if (lastTime === null) lastTime = t;
+    var dt = Math.min(t - lastTime, 200);
+    lastTime = t;
+
+    if (state === 'running') {
+      acc += dt;
+      while (acc >= stepMs && state === 'running') {
+        acc -= stepMs;
+        step();
+      }
+    }
+
+    draw();
+    requestAnimationFrame(tick);
+  }
+
+  // ---------------- 绘制 ----------------
+  function drawGrid() {
+    ctx.strokeStyle = GRID;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (var i = 1; i < COLS; i++) {
+      ctx.moveTo(i * CELL + 0.5, 0);
+      ctx.lineTo(i * CELL + 0.5, HEIGHT);
+    }
+    for (var j = 1; j < ROWS; j++) {
+      ctx.moveTo(0, j * CELL + 0.5);
+      ctx.lineTo(WIDTH, j * CELL + 0.5);
+    }
+    ctx.stroke();
+  }
+
+  function circle(cx, cy, r, fill) {
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function ellipse(cx, cy, rx, ry, fill) {
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function draw() {
+    ctx.fillStyle = BOARD_BG;
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    drawGrid();
+
+    // ---------- 食物（带光晕） ----------
+    if (food) {
+      var fx = food[0], fy = food[1];
+      var fcx = fx * CELL + CELL / 2;
+      var fcy = fy * CELL + CELL / 2;
+
+      // 外圈光晕
+      for (var k = 4; k >= 1; k--) {
+        var gr = CELL / 2 - 4 + k * 2;
+        var gcol = hexc(mix(FOOD_RGB, BOARD_RGB, k / 4.5));
+        circle(fcx, fcy, gr, gcol);
+      }
+
+      // 果肉
+      var fr = CELL / 2 - 4;
+      circle(fcx, fcy, fr, hexc(FOOD_RGB));
+
+      // 高光
+      ellipse(fcx - fr * 0.3, fcy - fr * 0.5, fr * 0.25, fr * 0.25, '#ffe4e6');
+    }
+
+    // ---------- 蛇身 ----------
+    var n = snake.length;
+    if (n > 0) {
+      // 身体：用圆头粗线连成一整条
+      ctx.lineCap = 'round';
+      ctx.lineWidth = CELL - 4;
+      for (var i = 0; i < n - 1; i++) {
+        var x1 = snake[i][0], y1 = snake[i][1];
+        var x2 = snake[i + 1][0], y2 = snake[i + 1][1];
+        ctx.strokeStyle = snakeColor((i + 0.5) / n);
+        ctx.beginPath();
+        ctx.moveTo(x1 * CELL + CELL / 2, y1 * CELL + CELL / 2);
+        ctx.lineTo(x2 * CELL + CELL / 2, y2 * CELL + CELL / 2);
+        ctx.stroke();
+      }
+
+      // 头部圆形
+      var hx = snake[0][0], hy = snake[0][1];
+      var hcx = hx * CELL + CELL / 2;
+      var hcy = hy * CELL + CELL / 2;
+      var hr = CELL / 2 - 1;
+      circle(hcx, hcy, hr, snakeColor(0));
+
+      // 眼睛
+      var dx = direction[0], dy = direction[1];
+      var px = -dy, py = dx;
+      for (var s = 1; s >= -1; s -= 2) {
+        var ex = hcx + dx * 5 + px * 3.8 * s;
+        var ey = hcy + dy * 5 + py * 3.8 * s;
+        circle(ex, ey, 2.8, '#0b1029');
+        ellipse(ex - 0.1, ey - 0.5, 0.9, 0.9, '#ffffff');
+      }
+    }
+
+    // ---------- 状态遮罩 ----------
+    if (state !== 'running') {
+      ctx.fillStyle = BG;
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+      var title, sub, tc;
+      if (state === 'ready') {
+        title = '贪 吃 蛇'; sub = '按 方 向 键 开 始'; tc = ACCENT;
+      } else if (state === 'paused') {
+        title = '暂 停 中'; sub = '按 Esc 继续游戏'; tc = TEXT;
+      } else if (state === 'over') {
+        title = '游 戏 结 束'; sub = '得分 ' + score + ' · 按 R 重新开始'; tc = '#fb7185';
+      } else {
+        title = '恭 喜 通 关'; sub = '按 R 再来一局'; tc = '#fbbf24';
+      }
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = tc;
+      ctx.font = 'bold 34px "Microsoft YaHei UI", "PingFang SC", sans-serif';
+      ctx.fillText(title, WIDTH / 2, HEIGHT / 2 - 26);
+      ctx.fillStyle = SUB;
+      ctx.font = '13px "Microsoft YaHei UI", "PingFang SC", sans-serif';
+      ctx.fillText(sub, WIDTH / 2, HEIGHT / 2 + 28);
+    }
+  }
+
+  // ---------------- 键盘 ----------------
+  function onKey(e) {
+    var k = e.key;
+    if (k === 'ArrowUp' || k === 'Up') { e.preventDefault(); turn(0, -1); }
+    else if (k === 'ArrowDown' || k === 'Down') { e.preventDefault(); turn(0, 1); }
+    else if (k === 'ArrowLeft' || k === 'Left') { e.preventDefault(); turn(-1, 0); }
+    else if (k === 'ArrowRight' || k === 'Right') { e.preventDefault(); turn(1, 0); }
+    else if (k === ' ') { e.preventDefault(); }
+    else if (k === 'Escape') { togglePause(); }
+    else if (k === 'r' || k === 'R') { restart(); }
+  }
+  window.addEventListener('keydown', onKey, { passive: false });
+
+  // ---------------- 焦点 & 自适应 ----------------
+  function focusGame() { wrap.focus(); }
+  wrap.addEventListener('click', focusGame);
+  canvas.addEventListener('click', focusGame);
+  window.addEventListener('load', focusGame);
+  focusGame();
+
+  function fitScale() {
+    var sw = window.innerWidth / 778;
+    var sh = window.innerHeight / (58 + HEIGHT + 14);
+    var s = Math.min(sw, sh, 1);
+    wrap.style.transform = 'scale(' + s + ')';
+  }
+  window.addEventListener('resize', fitScale);
+  fitScale();
+
+  // ---------------- 启动 ----------------
+  reset();
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

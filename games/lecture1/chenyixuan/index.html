@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>卡通贪吃蛇 · Snake Game</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='%2323cb97'/></svg>">
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #050e14;
+    overflow: hidden;
+  }
+  body {
+    display: grid;
+    place-items: center;
+  }
+  #stage {
+    position: relative;
+    width: 1040px;
+    height: 720px;
+    transform-origin: center center;
+  }
+  #game {
+    display: block;
+    outline: none;
+    border-radius: 6px;
+  }
+  #nickname {
+    position: absolute;
+    left: 290px;
+    top: 246px;
+    width: 460px;
+    height: 58px;
+    box-sizing: border-box;
+    padding: 0 16px;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #eef9f7;
+    font-size: 24px;
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    caret-color: #69f0be;
+    display: none;
+    z-index: 2;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="game" width="1040" height="720" tabindex="0"></canvas>
+  <input id="nickname" maxlength="12" autocomplete="off" spellcheck="false">
+</div>
+
+<script>
+"use strict";
+
+// ===== 常量（与原版 snake_game.py 一致）=====
+const CELL = 26;
+const GRID_W = 26;
+const GRID_H = 20;
+const BOARD_W = CELL * GRID_W;   // 676
+const BOARD_H = CELL * GRID_H;   // 520
+const BOARD_X = 28;
+const HEADER_H = 154;
+const SIDEBAR_X = BOARD_X + BOARD_W + 28; // 732
+const SIDEBAR_W = 280;
+const WIN_W = SIDEBAR_X + SIDEBAR_W + 28; // 1040
+const WIN_H = 720;
+
+const DEFAULT_BASE_SPEED = 7;
+const MIN_SPEED = 1;
+const MAX_SPEED = 18;
+const OBSTACLE_COUNT = 14;
+
+const C = {
+  BG: [7, 18, 27],
+  BG_BOTTOM: [10, 32, 41],
+  BOARD_BG: [10, 27, 36],
+  BOARD_BOTTOM: [12, 38, 46],
+  GRID: [30, 65, 72],
+  PANEL: [19, 43, 53],
+  PANEL_BORDER: [45, 92, 97],
+  TEXT: [238, 249, 247],
+  MUTED: [143, 171, 172],
+  GREEN_DARK: [11, 118, 99],
+  GREEN: [35, 203, 151],
+  GREEN_LIGHT: [105, 240, 190],
+  GREEN_HEAD: [74, 225, 165],
+  CREAM: [248, 250, 229],
+  INK: [10, 55, 48],
+  BLUSH: [255, 137, 151],
+  RED: [255, 91, 112],
+  YELLOW: [255, 211, 92],
+  ROCK: [103, 128, 136],
+  ROCK_LIGHT: [171, 194, 197],
+  ROCK_DARK: [43, 68, 76]
+};
+
+const FONT_STACK = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC","Arial Unicode MS",sans-serif';
+
+// ===== 画布与缩放 =====
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const stage = document.getElementById("stage");
+const nickInput = document.getElementById("nickname");
+
+function fitStage() {
+  const s = Math.min(window.innerWidth / WIN_W, window.innerHeight / WIN_H);
+  stage.style.transform = "scale(" + s + ")";
+}
+window.addEventListener("resize", fitStage);
+fitStage();
+
+// ===== 排行榜（localStorage，最多 100 条，同名去重保留最高）=====
+const LB_KEY = "sg-l1-chenyixuan-leaderboard";
+const LB_MAX = 100;
+
+const leaderboard = {
+  entries: [],
+  load() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LB_KEY) || "[]");
+      if (!Array.isArray(raw)) return;
+      const bestByName = {};
+      for (const item of raw) {
+        if (!item || typeof item !== "object" || !("nickname" in item) || !("score" in item)) continue;
+        const entry = { nickname: String(item.nickname).slice(0, 12), score: Math.max(0, Math.floor(Number(item.score)) || 0) };
+        const key = entry.nickname.trim().toLowerCase();
+        if (!bestByName[key] || entry.score > bestByName[key].score) bestByName[key] = entry;
+      }
+      this.entries = Object.values(bestByName).sort((a, b) => b.score - a.score).slice(0, LB_MAX);
+    } catch (e) {
+      this.entries = [];
+    }
+  },
+  save() {
+    try {
+      localStorage.setItem(LB_KEY, JSON.stringify(this.entries));
+    } catch (e) { /* 存储不可用时仅保留内存成绩 */ }
+  },
+  highScore() {
+    return this.entries.length ? this.entries[0].score : 0;
+  },
+  top(count) {
+    return this.entries.slice(0, count || 10);
+  },
+  bestFor(nickname) {
+    const key = nickname.trim().toLowerCase();
+    for (const e of this.entries) if (e.nickname.toLowerCase() === key) return e.score;
+    return 0;
+  },
+  hasNickname(nickname) {
+    const key = nickname.trim().toLowerCase();
+    return !!key && this.entries.some(e => e.nickname.trim().toLowerCase() === key);
+  },
+  record(nickname, score) {
+    const cleaned = (nickname.trim().slice(0, 12)) || "玩家";
+    const newScore = Math.max(0, Math.floor(score));
+    let entry = this.entries.find(e => e.nickname.toLowerCase() === cleaned.toLowerCase());
+    if (!entry) {
+      entry = { nickname: cleaned, score: newScore };
+      this.entries.push(entry);
+    } else if (newScore > entry.score) {
+      entry.score = newScore;
+    }
+    this.entries.sort((a, b) => b.score - a.score);
+    const rank = this.entries.indexOf(entry) + 1;
+    this.entries = this.entries.slice(0, LB_MAX);
+    this.save();
+    return rank;
+  }
+};
+leaderboard.load();
+
+// ===== 游戏状态（与原版 SnakeGameState 一致）=====
+const DIR = {
+  UP: { dx: 0, dy: -1, name: "UP" },
+  DOWN: { dx: 0, dy: 1, name: "DOWN" },
+  LEFT: { dx: -1, dy: 0, name: "LEFT" },
+  RIGHT: { dx: 1, dy: 0, name: "RIGHT" }
+};
+function opposite(a, b) { return a.dx === -b.dx && a.dy === -b.dy; }
+function posKey(x, y) { return x + "," + y; }
+
+const state = {
+  baseSpeed: DEFAULT_BASE_SPEED,
+  snake: [],
+  direction: DIR.RIGHT,
+  queued: DIR.RIGHT,
+  score: 0,
+  paused: false,
+  gameOver: false,
+  obstacles: [],
+  obstacleSet: new Set(),
+  food: null
+};
+
+function currentSpeed() {
+  return Math.min(state.baseSpeed + Math.floor(state.score / 3), MAX_SPEED);
+}
+
+function adjustBaseSpeed(amount) {
+  state.baseSpeed = Math.max(MIN_SPEED, Math.min(state.baseSpeed + amount, MAX_SPEED));
+}
+
+function resetState() {
+  const cx = Math.floor(GRID_W / 2);
+  const cy = Math.floor(GRID_H / 2);
+  state.snake = [{ x: cx, y: cy }, { x: cx - 1, y: cy }, { x: cx - 2, y: cy }];
+  state.direction = DIR.RIGHT;
+  state.queued = DIR.RIGHT;
+  state.score = 0;
+  state.paused = false;
+  state.gameOver = false;
+  spawnObstacles();
+  spawnFood();
+}
+
+function spawnObstacles() {
+  const head = state.snake[0];
+  const snakeKeys = new Set(state.snake.map(p => posKey(p.x, p.y)));
+  const available = [];
+  for (let y = 0; y < GRID_H; y++) {
+    for (let x = 0; x < GRID_W; x++) {
+      if (snakeKeys.has(posKey(x, y))) continue;
+      // 出生安全区：曼哈顿距离 > 3
+      if (Math.abs(x - head.x) + Math.abs(y - head.y) <= 3) continue;
+      available.push({ x, y });
+    }
+  }
+  // 随机取样（Fisher-Yates 部分洗牌）
+  const count = Math.min(OBSTACLE_COUNT, available.length);
+  for (let i = 0; i < count; i++) {
+    const j = i + Math.floor(Math.random() * (available.length - i));
+    const tmp = available[i]; available[i] = available[j]; available[j] = tmp;
+  }
+  state.obstacles = available.slice(0, count);
+  state.obstacleSet = new Set(state.obstacles.map(p => posKey(p.x, p.y)));
+}
+
+function spawnFood() {
+  const occupied = new Set(state.obstacleSet);
+  for (const p of state.snake) occupied.add(posKey(p.x, p.y));
+  const empty = [];
+  for (let y = 0; y < GRID_H; y++) {
+    for (let x = 0; x < GRID_W; x++) {
+      if (!occupied.has(posKey(x, y))) empty.push({ x, y });
+    }
+  }
+  state.food = empty.length ? empty[Math.floor(Math.random() * empty.length)] : null;
+}
+
+function setDirection(dir) {
+  if (state.gameOver || opposite(dir, state.direction)) return;
+  state.queued = dir;
+}
+
+function togglePause() {
+  if (!state.gameOver) state.paused = !state.paused;
+}
+
+function stepState() {
+  if (state.paused || state.gameOver) return;
+  state.direction = state.queued;
+  const head = state.snake[0];
+  const newHead = { x: head.x + state.direction.dx, y: head.y + state.direction.dy };
+  const hitWall = !(newHead.x >= 0 && newHead.x < GRID_W && newHead.y >= 0 && newHead.y < GRID_H);
+  const hitObstacle = state.obstacleSet.has(posKey(newHead.x, newHead.y));
+  const eating = state.food !== null && newHead.x === state.food.x && newHead.y === state.food.y;
+  const body = eating ? state.snake : state.snake.slice(0, -1);
+  const hitSelf = body.some(p => p.x === newHead.x && p.y === newHead.y);
+  if (hitWall || hitObstacle || hitSelf) {
+    state.gameOver = true;
+    return;
+  }
+  state.snake.unshift(newHead);
+  if (eating) {
+    state.score += 1;
+    spawnFood();
+  } else {
+    state.snake.pop();
+  }
+}
+
+// ===== 界面模式 =====
+const MODE = { MENU: "menu", INSTRUCTIONS: "instructions", SETUP: "setup", PLAYING: "playing", GAME_OVER: "game_over" };
+let mode = MODE.MENU;
+let nickname = "";
+let setupError = "";
+let currentRank = null;
+let roundScore = 0;
+let personalBest = 0;
+let lastMoveAt = performance.now();
+
+// 按钮区域（与原版坐标一致）
+const RECT = {
+  menuStart: { x: WIN_W / 2 - 170, y: 458, w: 340, h: 58 },
+  menuHelp: { x: WIN_W / 2 - 170, y: 530, w: 340, h: 54 },
+  back: { x: 224, y: 622, w: 150, h: 44 },
+  nickBox: { x: WIN_W / 2 - 230, y: 246, w: 460, h: 58 },
+  speedMinus: { x: WIN_W / 2 - 142, y: 378, w: 56, h: 50 },
+  speedPlus: { x: WIN_W / 2 + 86, y: 378, w: 56, h: 50 },
+  setupStart: { x: WIN_W / 2 - 170, y: 515, w: 340, h: 56 },
+  replay: { x: WIN_W / 2 - 238, y: 615, w: 220, h: 46 },
+  gameoverMenu: { x: WIN_W / 2 + 18, y: 615, w: 220, h: 46 },
+  pause: { x: SIDEBAR_X + 20, y: 573, w: SIDEBAR_W - 40, h: 44 },
+  playMenu: { x: SIDEBAR_X + 20, y: 629, w: SIDEBAR_W - 40, h: 36 }
+};
+
+const mouse = { x: -100, y: -100 };
+function inRect(r, p) { return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h; }
+
+function setMode(m) {
+  mode = m;
+  if (m === MODE.SETUP) {
+    nickInput.style.display = "block";
+    nickInput.value = nickname;
+    setTimeout(() => nickInput.focus(), 0);
+  } else {
+    nickInput.style.display = "none";
+    nickInput.blur();
+    canvas.focus();
+  }
+}
+
+function openSetup() {
+  nickname = "";
+  setupError = "";
+  setMode(MODE.SETUP);
+}
+
+function startNewGame() {
+  const cleaned = nickname.trim().slice(0, 12);
+  if (!cleaned) { setupError = "请先输入昵称"; return; }
+  if (leaderboard.hasNickname(cleaned)) { setupError = "昵称已存在，请更换一个昵称"; return; }
+  nickname = cleaned;
+  currentRank = null;
+  roundScore = 0;
+  resetState();
+  lastMoveAt = performance.now();
+  setMode(MODE.PLAYING);
+}
+
+function replay() {
+  currentRank = null;
+  roundScore = 0;
+  resetState();
+  lastMoveAt = performance.now();
+  setMode(MODE.PLAYING);
+}
+
+function finishRound() {
+  roundScore = state.score;
+  currentRank = leaderboard.record(nickname, roundScore);
+  personalBest = leaderboard.bestFor(nickname);
+  setMode(MODE.GAME_OVER);
+}
+
+// ===== 输入 =====
+const dirKeys = {
+  ArrowUp: DIR.UP, w: DIR.UP, W: DIR.UP,
+  ArrowDown: DIR.DOWN, s: DIR.DOWN, S: DIR.DOWN,
+  ArrowLeft: DIR.LEFT, a: DIR.LEFT, A: DIR.LEFT,
+  ArrowRight: DIR.RIGHT, d: DIR.RIGHT, D: DIR.RIGHT
+};
+
+window.addEventListener("keydown", (e) => {
+  const k = e.key;
+  const inInput = (e.target === nickInput);
+  // 方向键与空格始终阻止页面滚动（输入框内的空格除外，用于昵称）
+  if (k === "ArrowUp" || k === "ArrowDown" || k === "ArrowLeft" || k === "ArrowRight" || k === " " || k === "Spacebar") {
+    if (!(inInput && (k === " " || k === "Spacebar"))) e.preventDefault();
+  }
+  if (inInput && e.isComposing) return;
+
+  if (mode === MODE.MENU) {
+    if (k === "Enter" || k === "1") openSetup();
+    else if (k === "i" || k === "I" || k === "2") setMode(MODE.INSTRUCTIONS);
+    return;
+  }
+  if (mode === MODE.INSTRUCTIONS) {
+    if (k === "Escape" || k === "Backspace" || k === "Enter") setMode(MODE.MENU);
+    return;
+  }
+  if (mode === MODE.SETUP) {
+    if (k === "Escape") { setMode(MODE.MENU); return; }
+    if (k === "Backspace") {
+      if (!inInput) { nickname = nickname.slice(0, -1); nickInput.value = nickname; setupError = ""; }
+      return; // 输入框内退格走原生行为 + input 事件同步
+    }
+    if (k === "ArrowLeft" || k === "-") { adjustBaseSpeed(-1); if (inInput) e.preventDefault(); return; }
+    if (k === "ArrowRight" || k === "+" || k === "=") { adjustBaseSpeed(1); if (inInput) e.preventDefault(); return; }
+    if (k === "Enter") { startNewGame(); return; }
+    return;
+  }
+  if (mode === MODE.PLAYING) {
+    if (k === "Escape") { setMode(MODE.MENU); return; }
+    if (dirKeys[k]) { setDirection(dirKeys[k]); return; }
+    if (k === " " || k === "Spacebar" || k === "p" || k === "P") { togglePause(); return; }
+    return;
+  }
+  if (mode === MODE.GAME_OVER) {
+    if (k === "r" || k === "R" || k === "Enter") { replay(); return; }
+    if (k === "Escape" || k === "m" || k === "M") { setMode(MODE.MENU); return; }
+  }
+});
+
+nickInput.addEventListener("input", () => {
+  nickname = nickInput.value.slice(0, 12);
+  if (nickInput.value !== nickname) nickInput.value = nickname;
+  setupError = "";
+});
+
+function canvasPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * (WIN_W / r.width), y: (e.clientY - r.top) * (WIN_H / r.height) };
+}
+
+canvas.addEventListener("mousemove", (e) => {
+  const p = canvasPoint(e);
+  mouse.x = p.x; mouse.y = p.y;
+});
+
+canvas.addEventListener("mousedown", (e) => {
+  const p = canvasPoint(e);
+  mouse.x = p.x; mouse.y = p.y;
+  if (mode === MODE.MENU) {
+    if (inRect(RECT.menuStart, p)) openSetup();
+    else if (inRect(RECT.menuHelp, p)) setMode(MODE.INSTRUCTIONS);
+  } else if (mode === MODE.INSTRUCTIONS) {
+    if (inRect(RECT.back, p)) setMode(MODE.MENU);
+  } else if (mode === MODE.SETUP) {
+    if (inRect(RECT.speedMinus, p)) adjustBaseSpeed(-1);
+    else if (inRect(RECT.speedPlus, p)) adjustBaseSpeed(1);
+    else if (inRect(RECT.setupStart, p)) { startNewGame(); return; }
+    else if (inRect(RECT.back, p)) { setMode(MODE.MENU); return; }
+    nickInput.focus();
+  } else if (mode === MODE.PLAYING) {
+    if (inRect(RECT.pause, p)) togglePause();
+    else if (inRect(RECT.playMenu, p)) setMode(MODE.MENU);
+    canvas.focus();
+  } else if (mode === MODE.GAME_OVER) {
+    if (inRect(RECT.replay, p)) replay();
+    else if (inRect(RECT.gameoverMenu, p)) setMode(MODE.MENU);
+    canvas.focus();
+  }
+});
+
+// ===== 绘制工具 =====
+function rgb(c) { return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; }
+function rgba(c, a) { return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a + ")"; }
+
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function fillRoundRect(x, y, w, h, r, style) { rr(x, y, w, h, r); ctx.fillStyle = style; ctx.fill(); }
+function strokeRoundRect(x, y, w, h, r, style, lw) { rr(x, y, w, h, r); ctx.strokeStyle = style; ctx.lineWidth = lw || 1; ctx.stroke(); }
+
+function circle(x, y, r, style) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = style;
+  ctx.fill();
+}
+
+function ellipse(x, y, w, h, style) {
+  ctx.beginPath();
+  ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+  ctx.fillStyle = style;
+  ctx.fill();
+}
+
+function line(x1, y1, x2, y2, style, lw) {
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.strokeStyle = style;
+  ctx.lineWidth = lw || 1;
+  ctx.lineCap = "round";
+  ctx.stroke();
+}
+
+function polyline(points, style, lw) {
+  if (points.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+  ctx.strokeStyle = style;
+  ctx.lineWidth = lw || 1;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.stroke();
+}
+
+function polygon(points, style) {
+  ctx.beginPath();
+  ctx.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = style;
+  ctx.fill();
+}
+
+function setFont(size) { ctx.font = size + "px " + FONT_STACK; }
+
+function drawText(str, x, y, size, color) {
+  setFont(size);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = rgb(color);
+  ctx.fillText(str, x, y);
+}
+
+function drawTextCentered(str, y, size, color) {
+  setFont(size);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = rgb(color);
+  ctx.fillText(str, WIN_W / 2, y);
+  ctx.textAlign = "left";
+}
+
+function textWidth(str, size) {
+  setFont(size);
+  return ctx.measureText(str).width;
+}
+
+function drawGlow(cx, cy, color, radius, strength) {
+  strength = strength === undefined ? 52 : strength;
+  for (let r = radius; r > 4; r -= 6) {
+    const a = strength * Math.pow(1 - r / radius, 2) / 255;
+    circle(cx, cy, r, rgba(color, a));
+  }
+}
+
+function drawGlassPanel(rect, radius) {
+  radius = radius === undefined ? 16 : radius;
+  fillRoundRect(rect.x + 10, rect.y + 13, rect.w, rect.h, radius, "rgba(0,0,0,0.31)");
+  fillRoundRect(rect.x, rect.y, rect.w, rect.h, radius, rgba(C.PANEL, 224 / 255));
+  line(rect.x + radius, rect.y + 1, rect.x + rect.w - radius, rect.y + 1, rgba(C.GREEN_LIGHT, 60 / 255), 2);
+  strokeRoundRect(rect.x, rect.y, rect.w, rect.h, radius, rgba(C.PANEL_BORDER, 185 / 255), 1);
+}
+
+function drawButton(rect, label, accent) {
+  const hovered = inRect(rect, mouse);
+  let color, textColor;
+  if (accent) {
+    color = hovered ? C.GREEN_LIGHT : C.GREEN;
+    textColor = C.INK;
+  } else {
+    color = hovered ? [55, 67, 84] : [39, 49, 64];
+    textColor = C.TEXT;
+  }
+  if (accent && hovered) {
+    fillRoundRect(rect.x - 10, rect.y - 10, rect.w + 20, rect.h + 20, 17, rgba(C.GREEN, 42 / 255));
+  }
+  fillRoundRect(rect.x, rect.y + 4, rect.w, rect.h, 11, rgb([3, 12, 17]));
+  fillRoundRect(rect.x, rect.y, rect.w, rect.h, 11, rgb(color));
+  strokeRoundRect(rect.x, rect.y, rect.w, rect.h, 11, rgb(accent ? C.GREEN_DARK : C.GRID), 2);
+  line(rect.x + 14, rect.y + 2, rect.x + rect.w - 14, rect.y + 2, rgb(accent ? [138, 255, 210] : [82, 108, 117]), 1);
+  setFont(24);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = rgb(textColor);
+  ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+}
+
+// 预生成渐变
+const bgGrad = ctx.createLinearGradient(0, 0, 0, WIN_H);
+bgGrad.addColorStop(0, rgb(C.BG));
+bgGrad.addColorStop(1, rgb(C.BG_BOTTOM));
+const boardGrad = ctx.createLinearGradient(0, HEADER_H, 0, HEADER_H + BOARD_H);
+boardGrad.addColorStop(0, rgb(C.BOARD_BG));
+boardGrad.addColorStop(1, rgb(C.BOARD_BOTTOM));
+
+function drawBackgroundDetails(now) {
+  drawGlow(95, 105, C.GREEN, 180, 25);
+  drawGlow(WIN_W - 90, WIN_H - 70, [41, 173, 196], 220, 20);
+  ctx.strokeStyle = rgb([14, 38, 47]);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = 0; x < WIN_W; x += CELL) { ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, WIN_H); }
+  for (let y = 0; y < WIN_H; y += CELL) { ctx.moveTo(0, y + 0.5); ctx.lineTo(WIN_W, y + 0.5); }
+  ctx.stroke();
+  const sparkles = [[92, 52], [344, 116], [693, 72], [954, 126], [870, 693], [44, 637]];
+  const pulse = 1 + Math.floor(now / 360) % 2;
+  for (const [sx, sy] of sparkles) circle(sx, sy, pulse, rgb(C.GREEN_LIGHT));
+}
+
+function cellCenter(p) {
+  return [BOARD_X + p.x * CELL + CELL / 2, HEADER_H + p.y * CELL + CELL / 2];
+}
+
+// ===== 各屏绘制 =====
+function drawHeader(now) {
+  drawBackgroundDetails(now);
+  drawText("FRESH ARCADE", BOARD_X, 22, 14, C.YELLOW);
+  drawText("卡通贪吃蛇", BOARD_X, 45, 34, C.GREEN_LIGHT);
+  drawText("吃苹果 · 躲岩石 · 刷新纪录", BOARD_X + 2, 91, 14, C.MUTED);
+
+  const liveHigh = Math.max(leaderboard.highScore(), state.score);
+  const chips = [
+    [{ x: 400, y: 27, w: 174, h: 78 }, "本轮得分", String(state.score), C.TEXT],
+    [{ x: 590, y: 27, w: 190, h: 78 }, "历史最高", String(liveHigh), C.GREEN_LIGHT],
+    [{ x: 796, y: 27, w: 216, h: 78 }, "当前速度", currentSpeed() + " / 18", C.YELLOW]
+  ];
+  for (const [rect, label, value, color] of chips) {
+    drawGlassPanel(rect, 17);
+    drawText(label, rect.x + 18, rect.y + 13, 14, C.MUTED);
+    drawText(value, rect.x + 18, rect.y + 37, 24, color);
+  }
+  line(BOARD_X, HEADER_H - 18, WIN_W - BOARD_X, HEADER_H - 18, rgb([39, 91, 93]), 1);
+}
+
+function drawBoard(now) {
+  fillRoundRect(BOARD_X + 5, HEADER_H + 8, BOARD_W, BOARD_H, 20, rgb([2, 10, 15]));
+  fillRoundRect(BOARD_X - 4, HEADER_H - 4, BOARD_W + 8, BOARD_H + 8, 22, rgb(C.PANEL_BORDER));
+  ctx.save();
+  rr(BOARD_X, HEADER_H, BOARD_W, BOARD_H, 16);
+  ctx.clip();
+  ctx.fillStyle = boardGrad;
+  ctx.fillRect(BOARD_X, HEADER_H, BOARD_W, BOARD_H);
+  ctx.strokeStyle = rgb(C.GRID);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = BOARD_X; x <= BOARD_X + BOARD_W; x += CELL) { ctx.moveTo(x + 0.5, HEADER_H); ctx.lineTo(x + 0.5, HEADER_H + BOARD_H); }
+  for (let y = HEADER_H; y <= HEADER_H + BOARD_H; y += CELL) { ctx.moveTo(BOARD_X, y + 0.5); ctx.lineTo(BOARD_X + BOARD_W, y + 0.5); }
+  ctx.stroke();
+  ctx.restore();
+  strokeRoundRect(BOARD_X, HEADER_H, BOARD_W, BOARD_H, 16, rgb(C.GREEN_DARK), 2);
+
+  for (const ob of state.obstacles) drawObstacle(ob);
+  if (state.food) drawApple(state.food);
+  drawSnake(now);
+}
+
+function drawObstacle(p) {
+  const [cx, cy] = cellCenter(p);
+  ellipse(cx + 2 - 11, cy + 5 - 8, 22, 16, rgb([11, 16, 23]));
+  const pts = [
+    [cx - 10, cy + 6], [cx - 8, cy - 5], [cx - 3, cy - 10], [cx + 6, cy - 8],
+    [cx + 10, cy - 1], [cx + 8, cy + 8], [cx - 4, cy + 9]
+  ];
+  polygon(pts, rgb(C.ROCK_DARK));
+  const inner = pts.slice(0, -1).map(([x, y]) => [x, y - 2]);
+  inner.push([pts[pts.length - 1][0], pts[pts.length - 1][1] - 1]);
+  polygon(inner, rgb(C.ROCK));
+  line(cx - 5, cy - 6, cx + 3, cy - 7, rgb(C.ROCK_LIGHT), 3);
+  polyline([[cx + 2, cy - 5], [cx - 1, cy], [cx + 4, cy + 4]], rgb(C.ROCK_DARK), 2);
+}
+
+function drawApple(p) {
+  const [cx, cy] = cellCenter(p);
+  circle(cx + 2, cy + 3, 10, rgb([94, 27, 38]));
+  circle(cx, cy + 1, 9, rgb(C.RED));
+  circle(cx - 3, cy - 2, 3, rgb([255, 148, 158]));
+  line(cx, cy - 7, cx + 2, cy - 13, rgb([111, 72, 42]), 3);
+  ellipse(cx + 1, cy - 13, 10, 6, rgb(C.GREEN_LIGHT));
+}
+
+function drawAppleAt(cx, cy, radius) {
+  circle(cx + 3, cy + 5, radius, rgb([76, 20, 34]));
+  circle(cx, cy, radius, rgb(C.RED));
+  circle(cx - 5, cy - 5, Math.max(2, Math.floor(radius / 4)), rgb([255, 169, 175]));
+  line(cx, cy - radius + 2, cx + 3, cy - radius - 9, rgb([111, 72, 42]), 4);
+  ellipse(cx + 1, cy - radius - 9, 16, 8, rgb(C.GREEN_LIGHT));
+}
+
+function drawSnake(now) {
+  const snake = state.snake;
+  const centers = snake.map(cellCenter);
+
+  // 阴影与身体连接线
+  for (const shadow of [true, false]) {
+    const ox = shadow ? 2 : 0;
+    const oy = shadow ? 3 : 0;
+    const color = shadow ? rgb([12, 54, 38]) : rgb(C.GREEN_DARK);
+    for (let i = 0; i < centers.length - 1; i++) {
+      const w = Math.max(8, 19 - Math.floor(i / 2));
+      line(centers[i][0] + ox, centers[i][1] + oy, centers[i + 1][0] + ox, centers[i + 1][1] + oy, color, w);
+    }
+  }
+
+  // 从尾部往头部画，身体渐细
+  const snakeLen = Math.max(1, snake.length - 1);
+  for (let i = snake.length - 1; i > 0; i--) {
+    const [cx, cy] = centers[i];
+    const taper = i / snakeLen;
+    const radius = Math.max(6, Math.round(10 - taper * 3));
+    const shade = [Math.max(35, 35 - i * 2), Math.max(145, 203 - i * 2), Math.max(75, 151 - i)];
+    circle(cx + 2, cy + 3, radius, rgb([11, 65, 43]));
+    circle(cx, cy, radius, rgb(shade));
+    circle(cx - 3, cy - 3, 2, rgb(C.GREEN_LIGHT));
+    if (i % 2 === 0) circle(cx + 3, cy + 3, 2, rgb(C.GREEN_DARK));
+  }
+
+  drawTail(centers);
+  drawHead(centers[0], now);
+}
+
+function drawTail(centers) {
+  if (centers.length < 2) return;
+  const [tx, ty] = centers[centers.length - 1];
+  const [px, py] = centers[centers.length - 2];
+  const dx = tx === px ? 0 : (tx > px ? 1 : -1);
+  const dy = ty === py ? 0 : (ty > py ? 1 : -1);
+  const sx = -dy, sy = dx;
+  const tip = [tx + dx * 11, ty + dy * 11];
+  const base = [tx - dx * 3, ty - dy * 3];
+  polygon([tip, [base[0] + sx * 6, base[1] + sy * 6], [base[0] - sx * 6, base[1] - sy * 6]], rgb(C.GREEN));
+  circle(tx - 2, ty - 2, 2, rgb(C.GREEN_LIGHT));
+}
+
+function drawHead(center, now) {
+  const [cx, cy] = center;
+  const dx = state.direction.dx, dy = state.direction.dy;
+  const sx = -dy, sy = dx;
+  const hx = cx + dx * 2, hy = cy + dy * 2;
+  const w = dx ? 31 : 25;
+  const h = dx ? 25 : 31;
+
+  ellipse(hx - w / 2 + 2, hy - h / 2 + 3, w, h, rgb([11, 65, 43]));
+  ellipse(hx - (w + 2) / 2, hy - (h + 2) / 2, w + 2, h + 2, rgb(C.GREEN_DARK));
+  ellipse(hx - w / 2, hy - h / 2, w, h, rgb(C.GREEN_HEAD));
+  circle(hx - dx * 3 - 4, hy - dy * 3 - 4, 3, rgb(C.GREEN_LIGHT));
+
+  for (const side of [-1, 1]) {
+    const ex = hx + dx * 5 + sx * side * 6;
+    const ey = hy + dy * 5 + sy * side * 6;
+    circle(ex, ey, 6, rgb(C.INK));
+    circle(ex, ey, 5, rgb(C.CREAM));
+    const px2 = ex + dx * 2, py2 = ey + dy * 2;
+    circle(px2, py2, 2, rgb(C.INK));
+    circle(px2 - 1, py2 - 1, 1, rgb([255, 255, 255]));
+    // 眉毛
+    const bx = ex - dx * 5, by = ey - dy * 5;
+    line(bx - sx * 3, by - sy * 3, bx + sx * 3, by + sy * 3, rgb(C.INK), 2);
+  }
+
+  // 腮红
+  for (const side of [-1, 1]) {
+    circle(hx + dx * 8 + sx * side * 9, hy + dy * 8 + sy * side * 9, 2, rgb(C.BLUSH));
+  }
+
+  // 笑脸
+  const mx = hx + dx * 10, my = hy + dy * 10;
+  polyline([
+    [mx - sx * 3, my - sy * 3],
+    [mx + dx * 2, my + dy * 2],
+    [mx + sx * 3, my + sy * 3]
+  ], rgb(C.INK), 2);
+
+  // 舌头间歇伸出
+  if (Math.floor(now / 420) % 4 === 0 && !state.paused) {
+    const tsx = hx + dx * 13, tsy = hy + dy * 13;
+    const tex = tsx + dx * 8, tey = tsy + dy * 8;
+    line(tsx, tsy, tex, tey, rgb(C.RED), 2);
+    for (const side of [-1, 1]) {
+      line(tex, tey, tex + dx * 4 + sx * side * 3, tey + dy * 4 + sy * side * 3, rgb(C.RED), 2);
+    }
+  }
+}
+
+function drawGameSidebar() {
+  const playerCard = { x: SIDEBAR_X, y: HEADER_H, w: SIDEBAR_W, h: 92 };
+  const controlsCard = { x: SIDEBAR_X, y: 264, w: SIDEBAR_W, h: 286 };
+  const actionsCard = { x: SIDEBAR_X, y: 562, w: SIDEBAR_W, h: 112 };
+  for (const card of [playerCard, controlsCard, actionsCard]) drawGlassPanel(card, 18);
+
+  const ax = playerCard.x + 42, ay = playerCard.y + playerCard.h / 2;
+  circle(ax, ay, 24, rgb(C.GREEN_DARK));
+  circle(ax, ay, 19, rgb(C.GREEN_HEAD));
+  circle(ax - 6, ay - 4, 4, rgb(C.CREAM));
+  circle(ax + 6, ay - 4, 4, rgb(C.CREAM));
+  circle(ax - 5, ay - 4, 2, rgb(C.INK));
+  circle(ax + 7, ay - 4, 2, rgb(C.INK));
+  drawText("当前玩家", playerCard.x + 80, playerCard.y + 21, 14, C.MUTED);
+  drawText(nickname || "玩家", playerCard.x + 80, playerCard.y + 43, 24, C.TEXT);
+
+  drawText("方向控制", controlsCard.x + 20, controlsCard.y + 18, 14, C.MUTED);
+  const keySize = 54, keyGap = 9;
+  const kcx = controlsCard.x + controlsCard.w / 2;
+  const keys = [
+    [{ x: kcx - keySize / 2, y: controlsCard.y + 54, w: keySize, h: keySize }, "W", "↑"],
+    [{ x: kcx - keySize - keyGap, y: controlsCard.y + 117, w: keySize, h: keySize }, "A", "←"],
+    [{ x: kcx - keySize / 2, y: controlsCard.y + 117, w: keySize, h: keySize }, "S", "↓"],
+    [{ x: kcx + keyGap, y: controlsCard.y + 117, w: keySize, h: keySize }, "D", "→"]
+  ];
+  for (const [rect, letter, arrow] of keys) {
+    fillRoundRect(rect.x, rect.y + 3, rect.w, rect.h, 13, rgb([7, 27, 35]));
+    fillRoundRect(rect.x, rect.y, rect.w, rect.h, 13, rgb([31, 64, 72]));
+    strokeRoundRect(rect.x, rect.y, rect.w, rect.h, 13, rgb([67, 112, 116]), 1);
+    drawText(letter, rect.x + 8, rect.y + 5, 14, C.MUTED);
+    const aw = textWidth(arrow, 24);
+    drawText(arrow, rect.x + rect.w / 2 - aw / 2, rect.y + 21, 24, C.GREEN_LIGHT);
+  }
+  const tips = ["方向键或 WASD 移动", "空格 / P 暂停", "Esc 返回主菜单"];
+  tips.forEach((tip, i) => drawText(tip, controlsCard.x + 24, controlsCard.y + 194 + i * 25, 14, C.MUTED));
+
+  drawButton(RECT.pause, state.paused ? "继续游戏" : "暂停游戏", state.paused);
+  const menuColor = inRect(RECT.playMenu, mouse) ? C.TEXT : C.MUTED;
+  const label = "退出本轮并返回主菜单";
+  const lw = textWidth(label, 14);
+  drawText(label, RECT.playMenu.x + RECT.playMenu.w / 2 - lw / 2, RECT.playMenu.y + 8, 14, menuColor);
+}
+
+function drawOverlay(title, subtitle) {
+  ctx.fillStyle = "rgba(7,10,16,0.804)";
+  ctx.fillRect(0, HEADER_H, WIN_W, WIN_H - HEADER_H);
+  const cy = HEADER_H + (WIN_H - HEADER_H) / 2;
+  drawTextCentered(title, cy - 55, 34, C.TEXT);
+  drawTextCentered(subtitle, cy + 5, 24, C.YELLOW);
+}
+
+function drawMenu(now) {
+  drawBackgroundDetails(now);
+  drawGlassPanel({ x: 170, y: 48, w: WIN_W - 340, h: 610 }, 28);
+
+  const brand = "FRESH ARCADE · DESKTOP EDITION";
+  const bw = textWidth(brand, 14);
+  const brandRect = { x: WIN_W / 2 - bw / 2 - 15, y: 76, w: bw + 30, h: 30 };
+  fillRoundRect(brandRect.x, brandRect.y, brandRect.w, brandRect.h, 15, rgb([18, 55, 58]));
+  strokeRoundRect(brandRect.x, brandRect.y, brandRect.w, brandRect.h, 15, rgb([57, 113, 105]), 1);
+  drawText(brand, brandRect.x + brandRect.w / 2 - bw / 2, brandRect.y + 8, 14, C.YELLOW);
+
+  drawTextCentered("卡通贪吃蛇", 116, 56, C.GREEN_LIGHT);
+  drawTextCentered("吃苹果 · 躲岩石 · 冲击好友排行榜", 181, 17, C.MUTED);
+  drawMenuMascot(WIN_W / 2, 286);
+
+  const highCard = { x: WIN_W / 2 - 116, y: 376, w: 232, h: 58 };
+  fillRoundRect(highCard.x, highCard.y, highCard.w, highCard.h, 18, rgb([8, 31, 38]));
+  strokeRoundRect(highCard.x, highCard.y, highCard.w, highCard.h, 18, rgb([52, 106, 103]), 1);
+  drawText("历史最高分", highCard.x + 22, highCard.y + 20, 14, C.MUTED);
+  const hv = String(leaderboard.highScore());
+  drawText(hv, highCard.x + highCard.w - 22 - textWidth(hv, 24), highCard.y + 15, 24, C.YELLOW);
+
+  drawButton(RECT.menuStart, "开始新游戏", true);
+  drawButton(RECT.menuHelp, "游戏说明", false);
+  drawTextCentered("回车开始 · I 查看说明 · Esc 退出", 612, 14, C.MUTED);
+}
+
+function drawMenuMascot(cx, cy) {
+  drawGlow(cx, cy, C.GREEN, 116, 52);
+  const body = [[cx - 92, cy + 28], [cx - 48, cy + 54], [cx + 10, cy + 48], [cx + 59, cy + 24]];
+  polyline(body.map(([x, y]) => [x + 3, y + 6]), rgb([5, 35, 31]), 35);
+  polyline(body, rgb(C.GREEN_DARK), 32);
+  polyline(body, rgb(C.GREEN), 23);
+  body.slice(0, -1).forEach(([x, y], i) => {
+    circle(x - 5, y - 5, 3, rgb(C.GREEN_LIGHT));
+    if (i % 2 === 0) circle(x + 6, y + 5, 3, rgb([17, 141, 104]));
+  });
+  const hx = cx + 72, hy = cy + 8;
+  ellipse(hx - 27 + 3, hy - 25 + 5, 54, 50, rgb([5, 35, 31]));
+  ellipse(hx - 29, hy - 27, 58, 54, rgb(C.GREEN_DARK));
+  ellipse(hx - 27, hy - 25, 54, 50, rgb(C.GREEN_HEAD));
+  for (const ex of [hx + 3, hx + 17]) {
+    circle(ex, hy - 9, 8, rgb(C.CREAM));
+    circle(ex + 2, hy - 8, 4, rgb(C.INK));
+    circle(ex + 1, hy - 10, 1, rgb([255, 255, 255]));
+  }
+  // 微笑弧线
+  ctx.beginPath();
+  ctx.arc(hx + 12, hy + 7.5, 10.2, 0.15, 2.6);
+  ctx.strokeStyle = rgb(C.INK);
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  line(hx + 27, hy + 8, hx + 42, hy + 9, rgb(C.RED), 3);
+  line(hx + 42, hy + 9, hx + 48, hy + 4, rgb(C.RED), 2);
+  line(hx + 42, hy + 9, hx + 48, hy + 14, rgb(C.RED), 2);
+  drawAppleAt(cx - 126, cy - 4, 15);
+}
+
+function drawInstructions(now) {
+  drawBackgroundDetails(now);
+  drawGlassPanel({ x: 140, y: 46, w: WIN_W - 280, h: 630 }, 26);
+  drawTextCentered("HOW TO PLAY", 76, 14, C.YELLOW);
+  drawTextCentered("游戏说明", 105, 44, C.GREEN_LIGHT);
+  drawTextCentered("掌握规则，刷新你的最高纪录", 160, 17, C.MUTED);
+
+  const rules = [
+    "1. 输入未被使用的昵称，并选择 1–18 的初始速度。",
+    "2. 用方向键或 WASD 移动；蛇不能直接反向行驶。",
+    "3. 吃到一个苹果得 1 分，蛇身同时增长一格。",
+    "4. 每获得 3 分，速度提高一级；最高速度为 18。",
+    "5. 每局随机出现 14 块岩石，出生点附近不会生成岩石。",
+    "6. 撞到边界、岩石或自身，都会立即结束本轮游戏。",
+    "7. 空格或 P 暂停/继续；游戏中按 Esc 可退出。",
+    "8. 成绩保存在本地；结束后显示排行榜和本轮名次。"
+  ];
+  rules.forEach((rule, i) => {
+    const col = i % 2, row = Math.floor(i / 2);
+    const card = { x: 174 + col * 350, y: 208 + row * 87, w: 330, h: 68 };
+    fillRoundRect(card.x, card.y, card.w, card.h, 14, rgb([8, 29, 37]));
+    strokeRoundRect(card.x, card.y, card.w, card.h, 14, rgb([43, 84, 89]), 1);
+    const bx = card.x + 28, by = card.y + card.h / 2;
+    circle(bx, by, 17, rgb(C.GREEN_DARK));
+    const num = String(i + 1);
+    setFont(14);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = rgb(C.CREAM);
+    ctx.fillText(num, bx, by);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    const clean = rule.split(". ").slice(1).join(". ");
+    drawText(clean, card.x + 56, card.y + 24, 14, C.TEXT);
+  });
+
+  drawButton(RECT.back, "返回", false);
+  drawText("Esc / Backspace / 回车也可返回", RECT.back.x + RECT.back.w + 20, RECT.back.y + RECT.back.h / 2 - 7, 14, C.MUTED);
+}
+
+function drawSetup(now) {
+  drawBackgroundDetails(now);
+  drawGlassPanel({ x: 205, y: 46, w: WIN_W - 410, h: 630 }, 26);
+  drawTextCentered("NEW GAME", 78, 14, C.YELLOW);
+  drawTextCentered("准备出发", 108, 44, C.GREEN_LIGHT);
+  drawTextCentered("设置本轮玩家信息", 161, 17, C.MUTED);
+
+  const box = RECT.nickBox;
+  drawText("玩家昵称（最多 12 个字符，不可与榜单重复）", box.x, box.y - 30, 17, C.TEXT);
+  fillRoundRect(box.x, box.y, box.w, box.h, 10, rgb([9, 29, 37]));
+  strokeRoundRect(box.x, box.y, box.w, box.h, 10, rgb(nickname ? C.GREEN_LIGHT : C.PANEL_BORDER), 2);
+  const cursor = Math.floor(now / 500) % 2 === 0 ? "|" : "";
+  if (!nickname) {
+    drawText("请输入昵称" + cursor, box.x + 16, box.y + 12, 24, C.MUTED);
+  }
+
+  drawTextCentered("选择初始速度", 336, 17, C.TEXT);
+  drawButton(RECT.speedMinus, "-", false);
+  drawButton(RECT.speedPlus, "+", false);
+  drawTextCentered(String(state.baseSpeed), 382, 34, C.YELLOW);
+  const dotsY = 457;
+  for (let v = 1; v <= 18; v++) {
+    const x = WIN_W / 2 - 153 + (v - 1) * 18;
+    const color = v <= state.baseSpeed ? C.GREEN_LIGHT : [48, 79, 84];
+    circle(x, dotsY, v === state.baseSpeed ? 4 : 3, rgb(color));
+  }
+  drawTextCentered("左右键 / + - 调节 · 每 3 分速度 +1 · 最高 18", 475, 14, C.MUTED);
+
+  drawButton(RECT.setupStart, "进入游戏", true);
+  drawButton(RECT.back, "返回", false);
+  if (setupError) drawTextCentered(setupError, 584, 17, C.RED);
+}
+
+function drawGameOver() {
+  ctx.fillStyle = "rgba(3,12,18,0.882)";
+  ctx.fillRect(0, 0, WIN_W, WIN_H);
+  drawGlow(WIN_W / 2, 250, C.GREEN, 260, 32);
+  drawGlassPanel({ x: 132, y: 36, w: WIN_W - 264, h: 646 }, 26);
+
+  drawTextCentered("ROUND COMPLETE", 62, 14, C.YELLOW);
+  drawTextCentered("本轮结束", 90, 44, C.TEXT);
+
+  const cards = [
+    [{ x: 170, y: 151, w: 210, h: 78 }, "玩家", nickname, C.TEXT],
+    [{ x: 415, y: 151, w: 210, h: 78 }, "本轮得分", String(roundScore), C.YELLOW],
+    [{ x: 660, y: 151, w: 210, h: 78 }, "排行榜", "第 " + currentRank + " 名", C.GREEN_LIGHT]
+  ];
+  for (const [rect, label, value, color] of cards) {
+    fillRoundRect(rect.x, rect.y, rect.w, rect.h, 16, rgb([8, 29, 37]));
+    strokeRoundRect(rect.x, rect.y, rect.w, rect.h, 16, rgb([48, 94, 96]), 1);
+    drawText(label, rect.x + 17, rect.y + 12, 14, C.MUTED);
+    drawText(value, rect.x + 17, rect.y + 37, 24, color);
+  }
+
+  drawText("排行榜", 170, 256, 24, C.TEXT);
+  const personal = "个人最佳  " + personalBest;
+  drawText(personal, 870 - textWidth(personal, 17), 261, 17, C.GREEN_LIGHT);
+
+  const headerY = 305;
+  drawText("名次", 190, headerY, 14, C.MUTED);
+  drawText("玩家", 430, headerY, 14, C.MUTED);
+  drawText("最高得分", 765, headerY, 14, C.MUTED);
+  line(170, 332, 870, 332, rgb(C.PANEL_BORDER), 1);
+
+  let rows = leaderboard.top(7).map((e, i) => [i + 1, e.nickname, e.score]);
+  if (currentRank !== null && currentRank > 7) {
+    rows = rows.slice(0, 6);
+    rows.push([currentRank, nickname, personalBest]);
+  }
+
+  rows.forEach(([rank, name, score], i) => {
+    const y = 345 + i * 34;
+    const isCurrent = rank === currentRank;
+    if (isCurrent) {
+      fillRoundRect(170, y - 5, 700, 31, 7, rgb([23, 99, 75]));
+      strokeRoundRect(170, y - 5, 700, 31, 7, rgb([70, 205, 153]), 1);
+    }
+    const color = rank === 1 ? C.YELLOW : (isCurrent ? C.GREEN_LIGHT : C.TEXT);
+    drawText(String(rank), 198, y, 17, color);
+    drawText(name, 430, y, 17, color);
+    const sv = String(score);
+    drawText(sv, 828 - textWidth(sv, 17), y, 17, color);
+  });
+
+  drawButton(RECT.replay, "再玩一局", true);
+  drawButton(RECT.gameoverMenu, "返回主菜单", false);
+}
+
+// ===== 主循环 =====
+function draw(now) {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, WIN_W, WIN_H);
+
+  if (mode === MODE.MENU) {
+    drawMenu(now);
+  } else if (mode === MODE.INSTRUCTIONS) {
+    drawInstructions(now);
+  } else if (mode === MODE.SETUP) {
+    drawSetup(now);
+  } else {
+    drawHeader(now);
+    drawBoard(now);
+    drawGameSidebar();
+    if (mode === MODE.GAME_OVER) drawGameOver();
+    else if (state.paused) drawOverlay("游戏暂停", "按空格或 P 继续");
+  }
+
+  // 署名
+  setFont(12);
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = rgba(C.MUTED, 0.75);
+  ctx.fillText("by 陈一萱", WIN_W - 10, WIN_H - 20);
+  ctx.textAlign = "left";
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const interval = 1000 / currentSpeed();
+  if (mode === MODE.PLAYING && !state.paused && !state.gameOver && now - lastMoveAt >= interval) {
+    stepState();
+    lastMoveAt = now;
+    if (state.gameOver) finishRound();
+  }
+  draw(now);
+}
+
+resetState();
+canvas.focus();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>青蛇果园 · 贪吃蛇</title>
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    background: #ffffff;
+    height: 100%;
+    overflow: hidden;
+    font-family: Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+  #stage {
+    width: 648px;
+    flex: none;
+    transform-origin: center center;
+    background: #ffffff;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    padding: 18px 24px 12px;
+  }
+  .header .title { font-size: 32px; font-weight: bold; color: #254b36; line-height: 1; }
+  .header .slogan { font-size: 13px; color: #6b7e70; padding-bottom: 2px; }
+  .cards {
+    display: flex; gap: 5px;
+    padding: 0 24px 12px;
+  }
+  .card {
+    flex: 1;
+    background: #f1f7f1;
+    padding: 9px 14px;
+  }
+  .card .label { font-size: 13px; color: #66776c; }
+  .card .value { font-size: 28px; font-weight: bold; color: #2b593b; line-height: 1.25; }
+  .board-wrap { padding: 0 24px; }
+  canvas {
+    display: block;
+    border: 1px solid #d6e3d6;
+    outline: none;
+    cursor: pointer;
+  }
+  .status {
+    text-align: center;
+    font-size: 13px;
+    color: #587362;
+    padding: 8px 5px 5px;
+    min-height: 18px;
+  }
+  .controls {
+    display: flex; align-items: center;
+    padding: 3px 24px 9px;
+  }
+  .controls .lbl { font-size: 14px; color: #475b4c; }
+  select {
+    margin: 0 15px 0 6px;
+    font-size: 14px;
+    color: #2b593b;
+    background: #f1f7f1;
+    border: 1px solid #d1dfca;
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-family: inherit;
+  }
+  button {
+    font-size: 14px;
+    font-family: inherit;
+    color: #ffffff;
+    background: #365f41;
+    border: none;
+    border-radius: 4px;
+    padding: 5px 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #2b5034; }
+  button.ghost {
+    background: #eef4ec;
+    color: #365f41;
+    border: 1px solid #d1dfca;
+    margin-left: 8px;
+  }
+  button.ghost:hover { background: #e2ecdd; }
+  .controls .hint { margin-left: auto; font-size: 13px; color: #728176; }
+  .credit {
+    text-align: right;
+    font-size: 11px;
+    color: #a9b8ac;
+    padding: 0 24px 8px;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="header">
+    <div class="title">青蛇果园</div>
+    <div class="slogan">S N A K E&nbsp;&nbsp;/&nbsp;&nbsp;慢一点，也能吃得更多</div>
+  </div>
+  <div class="cards">
+    <div class="card"><div class="label">本局苹果</div><div class="value" id="v-score">00</div></div>
+    <div class="card"><div class="label">历史最佳 · 当前难度</div><div class="value" id="v-best">00</div></div>
+    <div class="card"><div class="label">成长等级</div><div class="value" id="v-level">LV. 1</div></div>
+  </div>
+  <div class="board-wrap">
+    <canvas id="board" width="600" height="480" tabindex="0"></canvas>
+  </div>
+  <div class="status" id="status"></div>
+  <div class="controls">
+    <span class="lbl">难度</span>
+    <select id="difficulty">
+      <option value="悠闲">悠闲</option>
+      <option value="标准" selected>标准</option>
+      <option value="挑战">挑战</option>
+    </select>
+    <button id="action">开始游戏</button>
+    <button class="ghost" id="restart">重新开始&nbsp;&nbsp;R</button>
+    <span class="hint">方向键 / WASD · 空格暂停</span>
+  </div>
+  <div class="credit">by 陈睿旸</div>
+</div>
+
+<script>
+"use strict";
+
+var CELL = 24, COLS = 25, ROWS = 20;
+var WIDTH = COLS * CELL, HEIGHT = ROWS * CELL;
+var SPEEDS = { "悠闲": [190, 95], "标准": [145, 65], "挑战": [105, 45] };
+var STORE_PREFIX = "sg-l1-chenruiyang-best-";
+
+var canvas = document.getElementById("board");
+var ctx = canvas.getContext("2d");
+var statusEl = document.getElementById("status");
+var actionBtn = document.getElementById("action");
+var diffSel = document.getElementById("difficulty");
+var vScore = document.getElementById("v-score");
+var vBest = document.getElementById("v-best");
+var vLevel = document.getElementById("v-level");
+
+var snake, direction, nextDirection, turnPending;
+var score, paused, over, won, ready, saveFailed;
+var food = null;
+var particles = [];
+var timer = null;
+var startBest = 0;
+var difficulty = "标准";
+
+/* ---------- 存档（localStorage，按难度分键） ---------- */
+function readBest(diff) {
+  try {
+    var v = parseInt(localStorage.getItem(STORE_PREFIX + diff), 10);
+    return (isNaN(v) || v < 0) ? 0 : v;
+  } catch (e) { return 0; }
+}
+function saveRecord() {
+  if (score <= readBest(difficulty)) return;
+  try {
+    localStorage.setItem(STORE_PREFIX + difficulty, String(score));
+  } catch (e) { saveFailed = true; }
+}
+
+/* ---------- 素材 ---------- */
+var appleImg = new Image();
+var appleReady = false;
+appleImg.onload = function () { appleReady = true; };
+appleImg.src = "../../assets/chenruiyang/apple.png";
+
+var skinImg = new Image();
+var bodyTexture = null; // 24x24 圆形贴图（纹理 + 光照），预渲染一次
+skinImg.onload = function () { buildBodyTexture(); };
+skinImg.src = "../../assets/chenruiyang/skin.png";
+
+function buildBodyTexture() {
+  var src = document.createElement("canvas");
+  src.width = skinImg.width; src.height = skinImg.height;
+  var sctx = src.getContext("2d");
+  sctx.drawImage(skinImg, 0, 0);
+  var data;
+  try { data = sctx.getImageData(0, 0, 96, 96).data; } catch (e) { return; }
+  var tex = document.createElement("canvas");
+  tex.width = CELL; tex.height = CELL;
+  var tctx = tex.getContext("2d");
+  var out = tctx.createImageData(CELL, CELL);
+  var c = CELL;
+  for (var y = 0; y < c; y++) {
+    for (var x = 0; x < c; x++) {
+      var nx = (x + 0.5 - c / 2) / (c / 2);
+      var ny = (y + 0.5 - c / 2) / (c / 2);
+      var d2 = nx * nx + ny * ny;
+      var o = (y * c + x) * 4;
+      if (d2 > 0.96) { out.data[o + 3] = 0; continue; }
+      var si = ((y * 4) * 96 + (x * 4)) * 4;
+      var grain = (data[si] + data[si + 1] + data[si + 2]) / 765;
+      var light = 0.55 + 0.45 * Math.sqrt(1 - d2);
+      var value = (0.48 + 0.52 * grain) * light;
+      out.data[o]     = Math.min(255, Math.round(126 * value));
+      out.data[o + 1] = Math.min(255, Math.round(169 * value));
+      out.data[o + 2] = Math.min(255, Math.round(61 * value));
+      out.data[o + 3] = 255;
+    }
+  }
+  tctx.putImageData(out, 0, 0);
+  bodyTexture = tex;
+}
+
+// 纹理加载失败时的纯色圆形后备
+function fallbackBody(ctx2) {
+  var tex = document.createElement("canvas");
+  tex.width = CELL; tex.height = CELL;
+  var t = tex.getContext("2d");
+  t.fillStyle = "#5d7a38";
+  t.beginPath();
+  t.arc(CELL / 2, CELL / 2, CELL / 2 * 0.98, 0, Math.PI * 2);
+  t.fill();
+  bodyTexture = tex;
+}
+skinImg.onerror = function () { fallbackBody(); };
+setTimeout(function () { if (!bodyTexture) fallbackBody(); }, 3000);
+
+/* ---------- 游戏逻辑 ---------- */
+function placeFood() {
+  var occupied = {};
+  for (var i = 0; i < snake.length; i++) occupied[snake[i][0] + "," + snake[i][1]] = true;
+  var empty = [];
+  for (var y = 0; y < ROWS; y++)
+    for (var x = 0; x < COLS; x++)
+      if (!occupied[x + "," + y]) empty.push([x, y]);
+  food = empty.length ? empty[Math.floor(Math.random() * empty.length)] : null;
+}
+
+function reset(isReady) {
+  if (timer !== null) { clearTimeout(timer); timer = null; }
+  snake = [[8, 10], [7, 10], [6, 10]];
+  direction = [1, 0];
+  nextDirection = [1, 0];
+  turnPending = false;
+  score = 0;
+  paused = false; over = false; won = false;
+  ready = !!isReady;
+  saveFailed = false;
+  particles = [];
+  startBest = readBest(difficulty);
+  placeFood();
+  updateUI();
+  if (!ready) schedule();
+}
+
+function schedule() {
+  var sp = SPEEDS[difficulty];
+  timer = setTimeout(tick, Math.max(sp[1], sp[0] - score * 3));
+}
+
+function primaryAction() {
+  if (ready || over) {
+    reset(false);
+  } else {
+    paused = !paused;
+    updateUI();
+  }
+  canvas.focus();
+}
+
+function tick() {
+  timer = null;
+  if (over || ready) return;
+  if (!paused) {
+    direction = nextDirection;
+    turnPending = false;
+    var head = [snake[0][0] + direction[0], snake[0][1] + direction[1]];
+    var eating = food !== null && head[0] === food[0] && head[1] === food[1];
+    var body = eating ? snake : snake.slice(0, snake.length - 1);
+    var hitWall = head[0] < 0 || head[0] >= COLS || head[1] < 0 || head[1] >= ROWS;
+    var hitSelf = false;
+    for (var i = 0; i < body.length; i++)
+      if (body[i][0] === head[0] && body[i][1] === head[1]) { hitSelf = true; break; }
+    if (hitWall || hitSelf) {
+      over = true;
+    } else {
+      snake.unshift(head);
+      if (eating) {
+        score += 1;
+        saveRecord();
+        burst(head);
+        placeFood();
+        if (food === null) { over = true; won = true; }
+      } else {
+        snake.pop();
+      }
+    }
+    updateUI();
+  }
+  if (!over) schedule();
+}
+
+function burst(cell) {
+  var now = performance.now() / 1000;
+  for (var i = 0; i < 12; i++) {
+    var angle = i * Math.PI * 2 / 12;
+    particles.push({
+      x: (cell[0] + 0.5) * CELL,
+      y: (cell[1] + 0.5) * CELL,
+      vx: Math.cos(angle) * 35,
+      vy: Math.sin(angle) * 35,
+      born: now,
+      i: i
+    });
+  }
+}
+
+/* ---------- UI ---------- */
+function pad2(n) { return (n < 10 ? "0" : "") + n; }
+
+function updateUI() {
+  vScore.textContent = pad2(score);
+  vBest.textContent = pad2(readBest(difficulty));
+  vLevel.textContent = "LV. " + (1 + Math.floor(score / 5));
+  actionBtn.textContent = ready ? "开始游戏" : over ? "再来一局" : paused ? "继续游戏" : "暂停游戏";
+  statusEl.textContent =
+    ready ? "选择难度，然后出发吧" :
+    saveFailed ? "最高分暂未写入磁盘，本次运行仍会保留" :
+    paused ? "休息一下，果园等你回来" :
+    over ? "本局收获 " + score + " 个苹果 · 点击棋盘再来一局" :
+    difficulty + "模式  ·  再吃 " + (5 - score % 5) + " 个苹果升一级  ·  切换难度会开始新局";
+}
+
+/* ---------- 绘制 ---------- */
+function draw() {
+  var now = performance.now() / 1000;
+  var c = CELL;
+  ctx.clearRect(0, 0, WIDTH, HEIGHT);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  // 网格
+  ctx.strokeStyle = "#f1f5f0";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (var gx = c; gx < WIDTH; gx += c) { ctx.moveTo(gx + 0.5, 0); ctx.lineTo(gx + 0.5, HEIGHT); }
+  for (var gy = c; gy < HEIGHT; gy += c) { ctx.moveTo(0, gy + 0.5); ctx.lineTo(WIDTH, gy + 0.5); }
+  ctx.stroke();
+
+  // 苹果（脉动光晕 + 阴影 + 贴图）
+  if (food !== null) {
+    var fx = (food[0] + 0.5) * c, fy = (food[1] + 0.5) * c;
+    var pulse = 14 + Math.sin(now * 3) * 2;
+    ctx.fillStyle = "#fff3e9";
+    ctx.beginPath(); ctx.arc(fx, fy, pulse, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#e8dfd4";
+    ctx.beginPath(); ctx.ellipse(fx + 0.5, fy + 9, 8.5, 2, 0, 0, Math.PI * 2); ctx.fill();
+    var bob = Math.sin(now * 3);
+    if (appleReady) {
+      ctx.drawImage(appleImg, fx - 12, fy - 1 + bob - 12, 24, 24);
+    } else {
+      ctx.fillStyle = "#d94040";
+      ctx.beginPath(); ctx.arc(fx, fy - 1 + bob, 9, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // 蛇身阴影连线（偏移 +2）
+  if (snake.length > 1) {
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#dee6d9";
+    ctx.lineWidth = c - 1;
+    ctx.beginPath();
+    for (var i = 0; i < snake.length; i++) {
+      var px = (snake[i][0] + 0.5) * c + 2, py = (snake[i][1] + 0.5) * c + 2;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    // 蛇身主线
+    ctx.strokeStyle = "#486629";
+    ctx.lineWidth = c - 5;
+    ctx.beginPath();
+    for (var j = 0; j < snake.length; j++) {
+      var qx = (snake[j][0] + 0.5) * c, qy = (snake[j][1] + 0.5) * c;
+      if (j === 0) ctx.moveTo(qx, qy); else ctx.lineTo(qx, qy);
+    }
+    ctx.stroke();
+  }
+
+  // 蛇皮纹理圆形贴图（尾先头后）
+  if (bodyTexture) {
+    for (var k = snake.length - 1; k >= 0; k--) {
+      ctx.drawImage(bodyTexture, snake[k][0] * c, snake[k][1] * c);
+    }
+  }
+
+  // 蛇头：舌与眼睛
+  var hx = (snake[0][0] + 0.5) * c, hy = (snake[0][1] + 0.5) * c;
+  var dx = direction[0], dy = direction[1];
+  if (!(over || paused || ready) && Math.sin(now * 5) > 0.4) {
+    var tx = hx + dx * 15, ty = hy + dy * 15;
+    ctx.strokeStyle = "#c96469";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(hx + dx * 10, hy + dy * 10);
+    ctx.lineTo(tx, ty);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    for (var s = -1; s <= 1; s += 2) {
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(tx + dx * 3 - dy * s * 2, ty + dy * 3 + dx * s * 2);
+      ctx.stroke();
+    }
+  }
+  for (var side = -1; side <= 1; side += 2) {
+    var ex = hx + dx * 5 - dy * side * 6;
+    var ey = hy + dy * 5 + dx * side * 6;
+    ctx.fillStyle = "#e3bc54";
+    ctx.strokeStyle = "#354322";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(ex, ey, 2.8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#101510";
+    ctx.beginPath(); ctx.ellipse(ex, ey, 1, 1.8, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath(); ctx.ellipse(ex - 0.4, ey - 1.2, 0.4, 0.4, 0, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // 粒子
+  var pColors = ["#efaf51", "#83ad62", "#ed8d73"];
+  particles = particles.filter(function (p) { return now - p.born < 0.65; });
+  for (var pi = 0; pi < particles.length; pi++) {
+    var p = particles[pi];
+    var age = now - p.born;
+    var ppx = p.x + p.vx * age;
+    var ppy = p.y + p.vy * age + 25 * age * age;
+    var radius = 3 * (1 - age / 0.65);
+    if (radius <= 0) continue;
+    ctx.fillStyle = pColors[p.i % 3];
+    ctx.beginPath(); ctx.arc(ppx, ppy, radius, 0, Math.PI * 2); ctx.fill();
+  }
+
+  if (ready || paused || over) drawOverlay();
+}
+
+function drawOverlay() {
+  var x = WIDTH / 2, y = HEIGHT / 2;
+  ctx.fillStyle = "#e5ece1";
+  ctx.fillRect(x - 216, y - 110, 436, 224);
+  ctx.fillStyle = "#fcfefa";
+  ctx.strokeStyle = "#d1dfca";
+  ctx.lineWidth = 1;
+  ctx.fillRect(x - 220, y - 114, 436, 224);
+  ctx.strokeRect(x - 220, y - 114, 436, 224);
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#849878";
+  ctx.font = "13px Arial, sans-serif";
+  ctx.fillText("S N A K E   G A R D E N", x, y - 76);
+
+  var title = ready ? "欢迎来到青蛇果园" : paused ? "果园小憩" : won ? "果园大丰收！" : "这次收获，也很不错";
+  ctx.fillStyle = "#2d5039";
+  ctx.font = "bold 30px Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif";
+  ctx.fillText(title, x, y - 37);
+
+  var detail = ready ? "吃苹果，慢慢长大；记得避开墙壁和自己。" :
+               paused ? "准备好了，就继续你的收获。" :
+               "收获 " + score + " 个苹果   /   成长等级 " + (1 + Math.floor(score / 5));
+  ctx.fillStyle = "#6d806c";
+  ctx.font = "16px Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif";
+  ctx.fillText(detail, x, y + 3);
+
+  var hint = ready ? "点击这里 / 按空格开始" : paused ? "点击这里 / 按空格继续" : "点击这里 / 按 R 再来一局";
+  ctx.fillStyle = "#365f41";
+  ctx.fillRect(x - 135, y + 35, 270, 41);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 16px Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif";
+  ctx.fillText(hint, x, y + 56);
+
+  if (over && score > startBest) {
+    ctx.fillStyle = "#a17831";
+    ctx.font = "13px Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif";
+    ctx.fillText("刷新了当前难度的最高纪录！", x, y + 94);
+  }
+}
+
+/* ---------- 输入 ---------- */
+var MOVES = {
+  arrowup: [0, -1], w: [0, -1],
+  arrowdown: [0, 1], s: [0, 1],
+  arrowleft: [-1, 0], a: [-1, 0],
+  arrowright: [1, 0], d: [1, 0]
+};
+
+window.addEventListener("keydown", function (e) {
+  var key = e.key.toLowerCase();
+  if (key === " ") key = "space";
+  var isArrow = key.indexOf("arrow") === 0;
+  // 下拉框聚焦时，方向键交给原生控件
+  if (document.activeElement === diffSel && isArrow) return;
+  if (isArrow || key === "space") e.preventDefault();
+
+  if (key === "r") { reset(false); canvas.focus(); return; }
+  if (key === "space" || key === "enter") { primaryAction(); return; }
+  if (key === "escape" && !(ready || over)) { paused = true; updateUI(); return; }
+
+  var move = MOVES[key];
+  if (move && !(ready || over || paused || turnPending)) {
+    if (!(move[0] === direction[0] && move[1] === direction[1]) &&
+        !(move[0] === -direction[0] && move[1] === -direction[1])) {
+      nextDirection = move;
+      turnPending = true;
+    }
+  }
+});
+
+canvas.addEventListener("click", function () {
+  canvas.focus();
+  if (ready || over || paused) primaryAction();
+});
+
+actionBtn.addEventListener("click", function () { primaryAction(); });
+document.getElementById("restart").addEventListener("click", function () {
+  reset(false);
+  canvas.focus();
+});
+diffSel.addEventListener("change", function () {
+  difficulty = diffSel.value;
+  reset(true);
+  diffSel.blur();
+  canvas.focus();
+});
+
+// 失焦自动暂停（切到别的窗口 / 点击 iframe 外区域）
+window.addEventListener("blur", function () {
+  setTimeout(function () {
+    if (document.hasFocus()) return;
+    if (!(ready || over || paused)) {
+      paused = true;
+      updateUI();
+    }
+  }, 0);
+});
+
+/* ---------- 自适应缩放 ---------- */
+var stage = document.getElementById("stage");
+function fit() {
+  var sw = stage.offsetWidth, sh = stage.offsetHeight;
+  var scale = Math.min(window.innerWidth / sw, window.innerHeight / sh, 1);
+  // 允许在小 iframe 中缩小，在大屏幕上不放大超过 1（保持清晰）
+  if (window.innerWidth < sw || window.innerHeight < sh) {
+    scale = Math.min(window.innerWidth / sw, window.innerHeight / sh);
+  }
+  stage.style.transform = "scale(" + scale + ")";
+}
+window.addEventListener("resize", fit);
+
+/* ---------- 主循环 ---------- */
+function loop() {
+  draw();
+  requestAnimationFrame(loop);
+}
+
+reset(true);
+fit();
+requestAnimationFrame(loop);
+window.addEventListener("load", function () { canvas.focus(); fit(); });
+canvas.focus();
+</script>
+</body>
+</html>

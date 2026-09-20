@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>萌萌蛇大冒险 - by 范馨予</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #1c2b1e;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  #wrap {
+    width: min(100vw, calc(100vh * 4 / 3));
+    aspect-ratio: 4 / 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    outline: none;
+    image-rendering: auto;
+    cursor: default;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="960" height="720" tabindex="0"></canvas>
+</div>
+<script>
+"use strict";
+
+// ============================================================
+// 萌萌蛇大冒险 —— 范馨予 的 pygame 贪吃蛇作业 HTML5 移植版
+// 逻辑分辨率 960x720（原版窗口尺寸），网格 20px（48 x 36）
+// ============================================================
+
+const W = 960, H = 720;
+const BLOCK = 20;
+const INITIAL_SPEED = 7;          // 初始每秒步数
+const BOOST_FACTOR = 2;           // 按住空格加速倍率
+const WIN_SCORE = 100;            // 满分通关
+const NPC_COUNT = 3;              // 随机小蛇数量
+
+const MODE_NAMES = ["经典边界模式", "无边界穿墙模式"];
+const SPEED_NAMES = ["悠闲速度", "标准速度", "闪电速度"];
+const SPEED_MULT = [0.75, 1.0, 1.5];
+
+// 颜色（与原版一致）
+const BG_COLOR = "rgb(222,246,212)";
+const GRID_COLOR = "rgb(212,240,202)";
+const HILL_COLOR = "rgb(176,226,168)";
+const HILL2_COLOR = "rgb(192,234,182)";
+const CLOUD_COLOR = "rgb(255,255,255)";
+const SUN_COLOR = "rgb(255,238,158)";
+const TEXT_COLOR = "rgb(40,110,60)";
+const HEAD_COLOR = "rgb(86,200,120)";
+const EYE_COLOR = "rgb(45,45,45)";
+const BLUSH_COLOR = "rgb(255,160,175)";
+const TONGUE_COLOR = "rgb(255,90,100)";
+const BOOST_COLOR = "rgb(255,150,60)";
+const FOOD_COLOR = "rgb(235,70,70)";
+
+const SKINS = [
+  { name: "翠翠·绿", head: [86,200,120],  body: [[140,224,140],[104,210,126],[76,188,108]] },
+  { name: "蓝蓝·海", head: [86,156,255],  body: [[150,196,255],[110,170,250],[80,145,240]] },
+  { name: "金金·阳", head: [255,200,60],  body: [[255,225,130],[250,205,90],[240,185,60]] },
+  { name: "桃桃·樱", head: [255,130,170], body: [[255,180,205],[250,155,185],[242,132,168]] },
+  { name: "莓莓·紫", head: [172,126,255], body: [[204,166,255],[184,142,248],[160,116,236]] },
+  { name: "桔桔·橙", head: [255,152,64],  body: [[255,196,130],[250,172,96],[242,150,70]] },
+];
+
+const FONT = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei","SimHei",sans-serif';
+const FS = { title: 52, sub: 20, section: 22, btn: 16, rule: 17,
+             large: 60, medium: 36, small: 24, tiny: 20 };
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+function rgb(c) { return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; }
+function randint(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
+function clamp255(v) { return Math.max(0, Math.min(255, Math.round(v))); }
+
+// ============================================================
+// 音频：WebAudio 正弦波合成（原版 _make_tone 的等价实现）
+// ============================================================
+let audioCtx = null;
+let bgmTimer = null;
+
+function ensureAudio() {
+  if (!audioCtx) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      startBGM();
+    } catch (e) { audioCtx = null; }
+  }
+  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+}
+
+// notes: [[起始秒, 时长秒, 频率Hz], ...]
+function playTone(notes, volume) {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  for (const [st, dur, freq] of notes) {
+    if (freq <= 0) continue;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    const start = t0 + st;
+    const end = start + dur;
+    g.gain.setValueAtTime(0.0001, start);
+    g.gain.linearRampToValueAtTime(volume, start + 0.012);
+    // 末段淡出，避免爆音（与原版 env 一致）
+    g.gain.setValueAtTime(volume, Math.max(start + 0.012, end - 0.03));
+    g.gain.linearRampToValueAtTime(0.0001, end);
+    osc.connect(g);
+    g.connect(audioCtx.destination);
+    osc.start(start);
+    osc.stop(end + 0.02);
+  }
+}
+
+const SFX_EAT  = [[0.0, 0.07, 880], [0.06, 0.09, 1320]];
+const SFX_KILL = [[0.0, 0.06, 660], [0.05, 0.06, 880], [0.10, 0.12, 1180]];
+const SFX_DIE  = [[0.0, 0.14, 440], [0.12, 0.16, 330], [0.26, 0.26, 220]];
+const SFX_WIN  = [[0.0, 0.10, 660], [0.09, 0.10, 880], [0.18, 0.10, 1100], [0.27, 0.28, 1320]];
+
+function playEat()  { playTone(SFX_EAT, 0.30); }
+function playKill() { playTone(SFX_KILL, 0.32); }
+function playDie()  { playTone(SFX_DIE, 0.34); }
+function playWin()  { playTone(SFX_WIN, 0.32); }
+
+// 背景音乐：舒缓循环旋律 + 低八度叠加
+function startBGM() {
+  if (!audioCtx || bgmTimer) return;
+  const melody = [523, 587, 659, 784, 659, 587, 523, 440, 494, 523, 587, 523];
+  const notes = [];
+  let t = 0;
+  melody.forEach((f, i) => {
+    const dur = (i % 4 !== 3) ? 0.62 : 0.95;
+    notes.push([t, dur * 0.55, f]);
+    notes.push([t, dur * 0.55, f * 0.5]);
+    t += dur;
+  });
+  const loopMs = t * 1000;
+  const loopFn = () => { playTone(notes, 0.10); bgmTimer = setTimeout(loopFn, loopMs); };
+  loopFn();
+}
+
+// ============================================================
+// 静态背景（太阳/云/网格/山丘/小花），预渲染一次
+// ============================================================
+const bgCanvas = document.createElement("canvas");
+bgCanvas.width = W;
+bgCanvas.height = H;
+(function buildBackground() {
+  const b = bgCanvas.getContext("2d");
+  b.fillStyle = BG_COLOR;
+  b.fillRect(0, 0, W, H);
+
+  function circle(g, x, y, r, color) {
+    g.fillStyle = color;
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  // 太阳（右上角，柔和带光芒）
+  const sunX = W - 90, sunY = 90;
+  circle(b, sunX, sunY, 36, SUN_COLOR);
+  b.strokeStyle = SUN_COLOR;
+  b.lineWidth = 4;
+  b.lineCap = "round";
+  for (let a = 0; a < 360; a += 45) {
+    const rad = a * Math.PI / 180;
+    b.beginPath();
+    b.moveTo(sunX + Math.cos(rad) * 44, sunY + Math.sin(rad) * 44);
+    b.lineTo(sunX + Math.cos(rad) * 56, sunY + Math.sin(rad) * 56);
+    b.stroke();
+  }
+
+  // 白云
+  function drawCloud(cx, cy, s) {
+    const parts = [[0, 0, 18], [18, -8, 14], [-18, -6, 13], [32, 3, 11], [-31, 4, 11]];
+    for (const [dx, dy, r] of parts) circle(b, cx + dx * s, cy + dy * s, r * s, CLOUD_COLOR);
+  }
+  drawCloud(W * 0.16, H * 0.20, 1.2);
+  drawCloud(W * 0.52, H * 0.12, 1.0);
+  drawCloud(W * 0.72, H * 0.32, 0.8);
+
+  // 极淡网格
+  b.strokeStyle = GRID_COLOR;
+  b.lineWidth = 1;
+  b.beginPath();
+  for (let x = 0; x <= W; x += BLOCK) { b.moveTo(x + 0.5, 0); b.lineTo(x + 0.5, H); }
+  for (let y = 0; y <= H; y += BLOCK) { b.moveTo(0, y + 0.5); b.lineTo(W, y + 0.5); }
+  b.stroke();
+
+  // 草地山丘
+  function ellipse(g, rx, ry, rw, rh, color) {
+    g.fillStyle = color;
+    g.beginPath();
+    g.ellipse(rx + rw / 2, ry + rh / 2, rw / 2, rh / 2, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+  ellipse(b, -160, H - 130, W + 520, 280, HILL_COLOR);
+  ellipse(b, -280, H - 90, W + 620, 210, HILL2_COLOR);
+
+  // 小花
+  function drawFlower(cx, cy, petal) {
+    petal = petal || "rgb(255,190,210)";
+    for (const [dx, dy] of [[0, -6], [0, 6], [-6, 0], [6, 0]])
+      circle(b, cx + dx, cy + dy, 5, petal);
+    circle(b, cx, cy, 4, "rgb(255,235,160)");
+  }
+  drawFlower(W * 0.09, H - 45);
+  drawFlower(W * 0.26, H - 28);
+  drawFlower(W * 0.44, H - 50, "rgb(255,255,255)");
+  drawFlower(W * 0.65, H - 32);
+  drawFlower(W * 0.88, H - 46, "rgb(255,255,255)");
+})();
+
+// ============================================================
+// 按钮
+// ============================================================
+class Button {
+  constructor(x, y, w, h, text, value) {
+    this.x = x; this.y = y; this.w = w; this.h = h;
+    this.text = text; this.value = value; this.hover = false;
+  }
+  draw(selected) {
+    let fill, border, tcol, bw;
+    if (selected)      { fill = "rgb(255,250,226)"; border = HEAD_COLOR;            tcol = HEAD_COLOR; bw = 3; }
+    else if (this.hover) { fill = "rgb(238,252,232)"; border = "rgb(120,190,140)";  tcol = TEXT_COLOR; bw = 2; }
+    else               { fill = "rgb(255,255,255)"; border = "rgb(176,206,182)";    tcol = TEXT_COLOR; bw = 2; }
+
+    const r = 14;
+    // 底部投影
+    ctx.fillStyle = "rgb(200,222,200)";
+    roundRect(this.x, this.y + 3, this.w, this.h, r);
+    ctx.fill();
+    ctx.fillStyle = fill;
+    roundRect(this.x, this.y, this.w, this.h, r);
+    ctx.fill();
+    ctx.strokeStyle = border;
+    ctx.lineWidth = bw;
+    roundRect(this.x, this.y, this.w, this.h, r);
+    ctx.stroke();
+
+    if (selected) {
+      const tx = this.x + 16, cy = this.y + this.h / 2;
+      ctx.strokeStyle = HEAD_COLOR;
+      ctx.lineWidth = 3;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(tx, cy);
+      ctx.lineTo(tx + 5, cy + 6);
+      ctx.lineTo(tx + 14, cy - 7);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = tcol;
+    ctx.font = FS.btn + "px " + FONT;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(this.text, this.x + this.w / 2, this.y + this.h / 2 + 1);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+  }
+  hit(px, py) {
+    return px >= this.x && px <= this.x + this.w && py >= this.y && py <= this.y + this.h;
+  }
+}
+
+function roundRect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// ============================================================
+// 玩家蛇
+// ============================================================
+class Snake {
+  constructor(skin) {
+    this.skin = skin;
+    const sx = Math.floor(W / 2 / BLOCK) * BLOCK;
+    const sy = Math.floor(H / 2 / BLOCK) * BLOCK;
+    this.body = [[sx, sy], [sx - BLOCK, sy], [sx - BLOCK * 2, sy]];
+    this.direction = [BLOCK, 0];
+    this.pendingTurns = [];
+  }
+  turn(nd) {
+    const last = this.pendingTurns.length ? this.pendingTurns[this.pendingTurns.length - 1] : this.direction;
+    if ((nd[0] === last[0] && nd[1] === last[1]) || (nd[0] === -last[0] && nd[1] === -last[1])) return;
+    if (this.pendingTurns.length < 2) this.pendingTurns.push(nd);
+  }
+  update(wrap) {
+    if (this.pendingTurns.length) this.direction = this.pendingTurns.shift();
+    const [hx, hy] = this.body[0];
+    let nx = hx + this.direction[0], ny = hy + this.direction[1];
+    if (wrap) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
+    this.body.unshift([nx, ny]);
+  }
+  draw() {
+    const grow = 2;
+    for (let i = 1; i < this.body.length; i++) {
+      const [x, y] = this.body[i];
+      const color = this.skin.body[(i - 1) % this.skin.body.length];
+      ctx.fillStyle = rgb(color);
+      ctx.beginPath();
+      ctx.arc(x + BLOCK / 2, y + BLOCK / 2, BLOCK / 2 + grow, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const [x, y] = this.body[0];
+    ctx.fillStyle = rgb(this.skin.head);
+    roundRect(x - grow, y - grow, BLOCK + 2 * grow, BLOCK + 2 * grow, 10 + grow);
+    ctx.fill();
+
+    const cx = x + BLOCK / 2, cy = y + BLOCK / 2;
+    const fx = this.direction[0] / BLOCK, fy = this.direction[1] / BLOCK;
+    const px = -fy, py = fx;
+    drawFace(cx, cy, fx, fy, px, py, 3200, 160, 1400, 850);
+  }
+  checkCollision(wrap) {
+    const [hx, hy] = this.body[0];
+    if (!wrap && (hx < 0 || hx >= W || hy < 0 || hy >= H)) return true;
+    for (let i = 1; i < this.body.length; i++) {
+      if (this.body[i][0] === hx && this.body[i][1] === hy) return true;
+    }
+    return false;
+  }
+}
+
+// 蛇脸：腮红 + 大眼睛(眨眼) + 小舌头（玩家与 NPC 共用）
+function drawFace(cx, cy, fx, fy, px, py, blinkCycle, blinkLen, tongueCycle, tongueLen) {
+  const now = performance.now();
+  // 腮红
+  ctx.fillStyle = BLUSH_COLOR;
+  for (const s of [-1, 1]) {
+    ctx.beginPath();
+    ctx.arc(cx - fx * 2 + px * 8 * s, cy - fy * 2 + py * 8 * s, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // 大眼睛
+  const blinking = (now % blinkCycle) < blinkLen;
+  for (const s of [-1, 1]) {
+    const ex = cx + fx * 3 + px * 5 * s;
+    const ey = cy + fy * 3 + py * 5 * s;
+    if (blinking) {
+      ctx.strokeStyle = EYE_COLOR;
+      ctx.lineWidth = 2;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(ex - 4, ey);
+      ctx.lineTo(ex + 4, ey);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = "rgb(255,255,255)";
+      ctx.beginPath(); ctx.arc(ex, ey, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = EYE_COLOR;
+      ctx.beginPath(); ctx.arc(ex + fx * 2, ey + fy * 2, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgb(255,255,255)";
+      ctx.beginPath(); ctx.arc(ex + fx * 3, ey + fy * 3, 1, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  // 小舌头
+  if ((now % tongueCycle) < tongueLen) {
+    ctx.strokeStyle = TONGUE_COLOR;
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(cx + fx * 10, cy + fy * 10);
+    ctx.lineTo(cx + fx * 16, cy + fy * 16);
+    ctx.stroke();
+  }
+}
+
+// ============================================================
+// 食物（卡通小苹果）
+// ============================================================
+class Food {
+  constructor(occupied, position) {
+    if (position) {
+      this.position = position;
+    } else {
+      this.randomizePosition(occupied || []);
+    }
+  }
+  randomizePosition(snakeBody) {
+    const occ = new Set(snakeBody.map(p => p[0] + "," + p[1]));
+    while (true) {
+      const x = randint(0, (W - BLOCK) / BLOCK) * BLOCK;
+      const y = randint(0, (H - BLOCK) / BLOCK) * BLOCK;
+      if (!occ.has(x + "," + y)) { this.position = [x, y]; return; }
+    }
+  }
+  draw() {
+    const [x, y] = this.position;
+    const cx = x + BLOCK / 2, cy = y + BLOCK / 2;
+    const radius = BLOCK / 2 - 1;
+    ctx.fillStyle = FOOD_COLOR;
+    ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.fill();
+    // 高光
+    ctx.fillStyle = "rgb(255,185,195)";
+    ctx.beginPath(); ctx.arc(cx - 4, cy - 4, 3, 0, Math.PI * 2); ctx.fill();
+    // 果柄
+    ctx.strokeStyle = "rgb(120,80,40)";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - radius + 1);
+    ctx.lineTo(cx + 2, cy - radius - 5);
+    ctx.stroke();
+    // 叶子
+    ctx.fillStyle = "rgb(80,180,90)";
+    ctx.beginPath(); ctx.arc(cx + 5, cy - radius - 3, 3, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+// ============================================================
+// NPC 随机小蛇
+// ============================================================
+class NPCSnake {
+  constructor(palette, occupied, avoid) {
+    this.palette = palette;
+    this.interval = randint(3, 4);
+    this.tick = randint(0, this.interval - 1);
+    const length = randint(3, 5);
+    const occ = new Set([...occupied].map(p => p[0] + "," + p[1]));
+    const checks = avoid || [];
+    while (true) {
+      const gx = randint(1, W / BLOCK - 2) * BLOCK;
+      const gy = randint(1, H / BLOCK - 2) * BLOCK;
+      const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      const [dx, dy] = dirs[randint(0, 3)];
+      const body = [];
+      for (let i = 0; i < length; i++) body.push([gx - dx * BLOCK * i, gy - dy * BLOCK * i]);
+      let ok = body.every(([sx, sy]) =>
+        sx >= 0 && sx < W && sy >= 0 && sy < H && !occ.has(sx + "," + sy));
+      if (ok) {
+        for (const [pos, gap] of checks) {
+          if (!body.every(([sx, sy]) => Math.abs(sx - pos[0]) + Math.abs(sy - pos[1]) >= gap)) {
+            ok = false; break;
+          }
+        }
+      }
+      if (ok) {
+        this.body = body;
+        this.direction = [dx * BLOCK, dy * BLOCK];
+        break;
+      }
+    }
+    // 出生保护：冻结 1200ms
+    this.frozenUntil = performance.now() + 1200;
+  }
+  update(occupied, wrap) {
+    if (performance.now() < this.frozenUntil) return;
+    this.tick++;
+    if (this.tick % this.interval) return;
+    const occ = new Set([...occupied].map(p => p[0] + "," + p[1]));
+    const fx = this.direction[0] / BLOCK, fy = this.direction[1] / BLOCK;
+    const [hx, hy] = this.body[0];
+
+    let options = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(d => !(d[0] === -fx && d[1] === -fy));
+    const cellOk = (d) => {
+      let nx = hx + d[0] * BLOCK, ny = hy + d[1] * BLOCK;
+      if (wrap) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
+      else if (nx < 0 || nx >= W || ny < 0 || ny >= H) return false;
+      return !occ.has(nx + "," + ny);
+    };
+    const safe = options.filter(cellOk);
+    let d;
+    if (safe.length) {
+      const straight = [fx, fy];
+      const straightSafe = safe.some(sd => sd[0] === straight[0] && sd[1] === straight[1]);
+      if (straightSafe && Math.random() < 0.85) d = straight;
+      else d = safe[randint(0, safe.length - 1)];
+    } else {
+      d = [fx, fy];
+    }
+    this.direction = [d[0] * BLOCK, d[1] * BLOCK];
+    let nx = hx + d[0] * BLOCK, ny = hy + d[1] * BLOCK;
+    if (wrap) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
+    this.body.unshift([nx, ny]);
+    this.body.pop();
+  }
+  soften(c, t) {
+    t = (t === undefined) ? 0.22 : t;
+    const bg = [222, 246, 212];
+    return [0, 1, 2].map(k => clamp255(c[k] * (1 - t) + bg[k] * t));
+  }
+  draw() {
+    const pal = this.palette;
+    // 身体（更小 + 描边，颜色向背景柔化）
+    for (let i = 1; i < this.body.length; i++) {
+      const [x, y] = this.body[i];
+      const color = this.soften(pal.body[(i - 1) % pal.body.length]);
+      const border = color.map(c => clamp255(c * 0.78));
+      const cx = x + BLOCK / 2, cy = y + BLOCK / 2, r = BLOCK / 2 - 2;
+      ctx.fillStyle = rgb(color);
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = rgb(border);
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    }
+    // 头
+    const [x, y] = this.body[0];
+    const hc = this.soften(pal.head);
+    ctx.fillStyle = rgb(hc);
+    roundRect(x, y, BLOCK, BLOCK, 10);
+    ctx.fill();
+    ctx.strokeStyle = rgb(hc.map(c => clamp255(c * 0.78)));
+    ctx.lineWidth = 2;
+    roundRect(x, y, BLOCK, BLOCK, 10);
+    ctx.stroke();
+
+    const cx = x + BLOCK / 2, cy = y + BLOCK / 2;
+    const fx = this.direction[0] / BLOCK, fy = this.direction[1] / BLOCK;
+    drawFace(cx, cy, fx, fy, -fy, fx, 2900, 150, 1700, 800);
+  }
+}
+
+function createNPCSnakes(snake, foods, existing, count, npcPool) {
+  const created = [];
+  const occSet = new Set(snake.body.map(p => p[0] + "," + p[1]));
+  for (const f of foods) occSet.add(f.position[0] + "," + f.position[1]);
+  for (const o of existing) for (const p of o.body) occSet.add(p[0] + "," + p[1]);
+  const occArr = () => [...occSet].map(s => s.split(",").map(Number));
+  for (let i = 0; i < count; i++) {
+    const avoid = [[snake.body[0], 5 * BLOCK]];
+    for (const o of existing.concat(created)) avoid.push([o.body[0], 3 * BLOCK]);
+    const npc = new NPCSnake(npcPool[randint(0, npcPool.length - 1)], occArr(), avoid);
+    created.push(npc);
+    for (const p of npc.body) occSet.add(p[0] + "," + p[1]);
+  }
+  return created;
+}
+
+function startNewRound(playerSkin, npcPool) {
+  const snake = new Snake(playerSkin);
+  const foods = [new Food(snake.body)];
+  const npcs = createNPCSnakes(snake, foods, [], NPC_COUNT, npcPool);
+  return [snake, foods, npcs];
+}
+
+// ============================================================
+// 游戏状态
+// ============================================================
+let gameState = "START"; // START / PLAYING / GAME_OVER / WIN
+let skinIndex = 0, modeIndex = 0, speedIndex = 1;
+let playerSkin = SKINS[skinIndex];
+let npcPool = SKINS.filter((s, i) => i !== skinIndex);
+let snake, foods, npcSnakes;
+[snake, foods, npcSnakes] = startNewRound(playerSkin, npcPool);
+let score = 0;
+let stats = { apples: 0, kills: 0 };
+let moveTimer = 0;
+let MOVE_MS_BASE = 1000 / INITIAL_SPEED;
+let spaceHeld = false;
+
+// ---- 主界面布局（窗口坐标 960x720）----
+const CX = W / 2;
+const Y_TITLE = 22, Y_SUB = 118, Y_PREVIEW = 172;
+const Y_SKIN_LABEL = 216, Y_SKIN_BTN = 250;
+const Y_MODE_LABEL = 310, Y_MODE_BTN = 344;
+const Y_SPEED_LABEL = 404, Y_SPEED_BTN = 438;
+const Y_START_BTN = 506, Y_RULES = 592;
+const BH = 34, RULE_LH = 32;
+
+const skinBtns = [], modeBtns = [], speedBtns = [];
+(function buildButtons() {
+  const bw = 140, gap = 10;
+  const totalW = SKINS.length * bw + (SKINS.length - 1) * gap;
+  const sx0 = CX - totalW / 2;
+  SKINS.forEach((sk, i) => skinBtns.push(new Button(sx0 + i * (bw + gap), Y_SKIN_BTN, bw, BH, sk.name, i)));
+
+  const mw = 280, mgap = 16;
+  const totalM = MODE_NAMES.length * mw + (MODE_NAMES.length - 1) * mgap;
+  const mx0 = CX - totalM / 2;
+  MODE_NAMES.forEach((n, i) => modeBtns.push(new Button(mx0 + i * (mw + mgap), Y_MODE_BTN, mw, BH, n, i)));
+
+  const sw = 200, sgap = 14;
+  const totalS = SPEED_NAMES.length * sw + (SPEED_NAMES.length - 1) * sgap;
+  const sx1 = CX - totalS / 2;
+  SPEED_NAMES.forEach((n, i) => speedBtns.push(new Button(sx1 + i * (sw + sgap), Y_SPEED_BTN, sw, BH, n, i)));
+})();
+const startBtn = new Button(CX - 170, Y_START_BTN, 340, 42, "按回车 出发!", -1);
+const allBtns = skinBtns.concat(modeBtns, speedBtns, [startBtn]);
+
+function beginPlay() {
+  playerSkin = SKINS[skinIndex];
+  npcPool = SKINS.filter((s, i) => i !== skinIndex);
+  [snake, foods, npcSnakes] = startNewRound(playerSkin, npcPool);
+  score = 0;
+  stats = { apples: 0, kills: 0 };
+  moveTimer = 0;
+  MOVE_MS_BASE = 1000 / INITIAL_SPEED;
+  gameState = "PLAYING";
+}
+
+// ============================================================
+// 输入
+// ============================================================
+function canvasPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) * (W / r.width), (e.clientY - r.top) * (H / r.height)];
+}
+
+canvas.addEventListener("mousemove", (e) => {
+  const [mx, my] = canvasPoint(e);
+  const hovering = gameState === "START";
+  for (const b of allBtns) b.hover = hovering && b.hit(mx, my);
+});
+
+canvas.addEventListener("mousedown", (e) => {
+  ensureAudio();
+  canvas.focus();
+  if (gameState !== "START") return;
+  const [mx, my] = canvasPoint(e);
+  for (const b of skinBtns)  if (b.hit(mx, my)) skinIndex = b.value;
+  for (const b of modeBtns)  if (b.hit(mx, my)) modeIndex = b.value;
+  for (const b of speedBtns) if (b.hit(mx, my)) speedIndex = b.value;
+  if (startBtn.hit(mx, my)) beginPlay();
+});
+
+window.addEventListener("keydown", (e) => {
+  const k = e.key;
+  // 阻止方向键/空格滚动页面
+  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(k) || e.code === "Space") {
+    e.preventDefault();
+  }
+  ensureAudio();
+
+  if (e.code === "Space") { spaceHeld = true; }
+
+  if (gameState === "START") {
+    if (k >= "1" && k <= "6") skinIndex = Number(k) - 1;
+    else if (k === "ArrowLeft") skinIndex = (skinIndex - 1 + SKINS.length) % SKINS.length;
+    else if (k === "ArrowRight") skinIndex = (skinIndex + 1) % SKINS.length;
+    else if (k === "ArrowUp") modeIndex = (modeIndex - 1 + MODE_NAMES.length) % MODE_NAMES.length;
+    else if (k === "ArrowDown") modeIndex = (modeIndex + 1) % MODE_NAMES.length;
+    else if (k === "," || k === "-") speedIndex = (speedIndex - 1 + SPEED_NAMES.length) % SPEED_NAMES.length;
+    else if (k === "." || k === "=") speedIndex = (speedIndex + 1) % SPEED_NAMES.length;
+    else if (k === "Enter") beginPlay();
+  } else if (gameState === "GAME_OVER" || gameState === "WIN") {
+    if (k === "Enter") {
+      [snake, foods, npcSnakes] = startNewRound(playerSkin, npcPool);
+      score = 0;
+      stats = { apples: 0, kills: 0 };
+      moveTimer = 0;
+      MOVE_MS_BASE = 1000 / INITIAL_SPEED;
+      gameState = "PLAYING";
+    } else if (k === "Escape") {
+      gameState = "START";
+    }
+  } else if (gameState === "PLAYING") {
+    const kl = k.toLowerCase();
+    if (k === "ArrowUp" || kl === "w") snake.turn([0, -BLOCK]);
+    else if (k === "ArrowDown" || kl === "s") snake.turn([0, BLOCK]);
+    else if (k === "ArrowLeft" || kl === "a") snake.turn([-BLOCK, 0]);
+    else if (k === "ArrowRight" || kl === "d") snake.turn([BLOCK, 0]);
+    else if (k === "Escape") gameState = "START";
+  }
+});
+
+window.addEventListener("keyup", (e) => {
+  if (e.code === "Space") spaceHeld = false;
+});
+
+window.addEventListener("blur", () => { spaceHeld = false; });
+
+// ============================================================
+// 渲染辅助
+// ============================================================
+function drawCentered(text, fontSize, color, cx, y, bold) {
+  ctx.font = (bold ? "bold " : "") + fontSize + "px " + FONT;
+  ctx.fillStyle = color;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText(text, cx, y);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+}
+
+function measure(text, fontSize, bold) {
+  ctx.font = (bold ? "bold " : "") + fontSize + "px " + FONT;
+  return ctx.measureText(text).width;
+}
+
+function drawAttribution() {
+  ctx.font = "11px " + FONT;
+  ctx.fillStyle = "rgba(40,110,60,0.55)";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("by 范馨予", W - 8, H - 6);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+}
+
+// ============================================================
+// 主界面绘制
+// ============================================================
+function drawStart() {
+  // 半透明白色面板
+  ctx.fillStyle = "rgba(255,255,255,0.59)";
+  ctx.fillRect(0, 0, W, H);
+
+  // 大标题（白色投影 + 主体）
+  ctx.font = "bold " + FS.title + "px " + FONT;
+  ctx.textBaseline = "top";
+  const title = "萌萌蛇大冒险";
+  const tw = ctx.measureText(title).width;
+  const tx = CX - tw / 2;
+  ctx.fillStyle = "rgb(255,255,255)";
+  ctx.fillText(title, tx + 4, Y_TITLE + 4);
+  ctx.fillStyle = HEAD_COLOR;
+  ctx.fillText(title, tx, Y_TITLE);
+  // 标题两侧渐隐短线 + 小圆点
+  const ly = Y_TITLE + FS.title * 0.6;
+  ctx.strokeStyle = HEAD_COLOR;
+  ctx.lineWidth = 4;
+  ctx.lineCap = "round";
+  for (const side of [-1, 1]) {
+    const x1 = CX + side * (tw / 2 + 18);
+    const x2 = CX + side * (tw / 2 + 66);
+    ctx.beginPath(); ctx.moveTo(x1, ly); ctx.lineTo(x2, ly); ctx.stroke();
+    ctx.fillStyle = "rgb(255,200,90)";
+    ctx.beginPath(); ctx.arc(x2 + side * 8, ly, 5, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.textBaseline = "alphabetic";
+
+  // 副标语
+  drawCentered("躲小蛇 · 吃苹果 · 冲满分", FS.sub, "rgb(110,170,120)", CX, Y_SUB);
+
+  // 皮肤预览（当前所选，朝右）
+  const skin = SKINS[skinIndex];
+  const r = BLOCK / 2 - 1;
+  for (let i = 0; i < 3; i++) {
+    ctx.fillStyle = rgb(skin.body[i % skin.body.length]);
+    ctx.beginPath();
+    ctx.arc(CX - (i + 1) * BLOCK, Y_PREVIEW, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = rgb(skin.head);
+  roundRect(CX, Y_PREVIEW - BLOCK / 2, BLOCK, BLOCK, 10);
+  ctx.fill();
+  const hxx = CX + BLOCK / 2;
+  for (const sgn of [-1, 1]) {
+    const ex = hxx + 2, ey = Y_PREVIEW + 6 * sgn;
+    ctx.fillStyle = "rgb(255,255,255)";
+    ctx.beginPath(); ctx.arc(ex, ey, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = EYE_COLOR;
+    ctx.beginPath(); ctx.arc(ex + 2, ey, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = BLUSH_COLOR;
+    ctx.beginPath(); ctx.arc(hxx - 6, Y_PREVIEW + 9 * sgn, 3, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.strokeStyle = TONGUE_COLOR;
+  ctx.lineWidth = 2;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(hxx + BLOCK / 2, Y_PREVIEW);
+  ctx.lineTo(hxx + BLOCK / 2 + 8, Y_PREVIEW);
+  ctx.stroke();
+
+  // 分区标题：左侧色条 + 主标题 + 次要说明
+  function drawSection(label, extra, yLabel) {
+    const lw = measure(label, FS.section, true);
+    const ew = extra ? measure(extra, FS.rule) : 0;
+    const total = lw + (extra ? 12 + ew : 0);
+    const x0 = CX - total / 2;
+    ctx.fillStyle = HEAD_COLOR;
+    roundRect(x0 - 18, yLabel + 4, 6, 26, 3);
+    ctx.fill();
+    drawCentered(label, FS.section, TEXT_COLOR, x0 + lw / 2, yLabel, true);
+    if (extra) {
+      ctx.font = FS.rule + "px " + FONT;
+      ctx.fillStyle = "rgb(128,178,136)";
+      ctx.textBaseline = "top";
+      ctx.fillText(extra, x0 + lw + 12, yLabel + 5);
+      ctx.textBaseline = "alphabetic";
+    }
+  }
+
+  drawSection("小蛇颜色", "当前：" + skin.name, Y_SKIN_LABEL);
+  skinBtns.forEach((b, i) => b.draw(i === skinIndex));
+
+  drawSection("游戏模式", "决定撞墙还是穿墙", Y_MODE_LABEL);
+  modeBtns.forEach((b, i) => b.draw(i === modeIndex));
+
+  drawSection("游戏速度", "随时可回主界面重选", Y_SPEED_LABEL);
+  speedBtns.forEach((b, i) => b.draw(i === speedIndex));
+
+  startBtn.draw(false);
+
+  // 规则说明
+  const rules = [
+    "方向键 操控小蛇   ·   按住 空格 加速",
+    "吃苹果 +10 分，满 100 分通关；蛇头碰到小蛇会失败",
+    "小秘诀：用身体顶住小蛇的头，它会在原地变成 2 个苹果!",
+  ];
+  let ry = Y_RULES;
+  ctx.textBaseline = "top";
+  for (const line of rules) {
+    const w = measure(line, FS.rule);
+    ctx.fillStyle = "rgb(150,205,160)";
+    ctx.beginPath();
+    ctx.arc(CX - w / 2 - 14, ry + 14, 4, 0, Math.PI * 2);
+    ctx.fill();
+    drawCentered(line, FS.rule, TEXT_COLOR, CX, ry);
+    ry += RULE_LH;
+    ctx.textBaseline = "top";
+  }
+  ctx.textBaseline = "alphabetic";
+}
+
+// ============================================================
+// 游戏进行中 / 结算绘制
+// ============================================================
+function drawPlaying() {
+  for (const f of foods) f.draw();
+  for (const npc of npcSnakes) npc.draw();
+  snake.draw();
+
+  // 左上角：分数 + 模式速度
+  const scoreText = "得分: " + score;
+  ctx.font = "bold " + FS.medium + "px " + FONT;
+  ctx.fillStyle = TEXT_COLOR;
+  ctx.textBaseline = "top";
+  ctx.fillText(scoreText, 10, 10);
+  const scoreH = FS.medium * 1.2;
+  ctx.font = FS.tiny + "px " + FONT;
+  ctx.fillText(MODE_NAMES[modeIndex] + " · " + SPEED_NAMES[speedIndex], 11, 12 + scoreH);
+
+  // 加速提示（右上角）
+  if (gameState === "PLAYING" && spaceHeld) {
+    ctx.font = FS.small + "px " + FONT;
+    const t = "冲鸭~ 加速中!";
+    const w = ctx.measureText(t).width;
+    ctx.fillStyle = BOOST_COLOR;
+    ctx.fillText(t, W - 10 - w, 10);
+  }
+  ctx.textBaseline = "alphabetic";
+
+  if (gameState === "GAME_OVER" || gameState === "WIN") {
+    ctx.fillStyle = "rgba(0,0,0,0.59)";
+    ctx.fillRect(0, 0, W, H);
+
+    const win = gameState === "WIN";
+    const overText = win ? "太棒啦! 满分通关!" : "呜呜, 被逮住了...";
+    const overColor = win ? HEAD_COLOR : FOOD_COLOR;
+    const totalColor = win ? "rgb(255,215,0)" : "rgb(255,255,255)";
+
+    drawCentered(overText, FS.large, overColor, CX, H * 0.22, true);
+    drawCentered("总分 " + score + " 分!", FS.large, totalColor, CX, H * 0.40, true);
+    drawCentered("吃掉小苹果: " + stats.apples + " 个", FS.large, "rgb(255,255,255)", CX, H * 0.56, true);
+    drawCentered("击倒小蛇: " + stats.kills + " 条", FS.large, "rgb(255,255,255)", CX, H * 0.56 + 70, true);
+    drawCentered("按 [回车] 再来一次!", FS.medium, "rgb(255,255,255)", CX, H * 0.82, true);
+    drawCentered("按 [ESC] 返回主界面", FS.medium, "rgb(255,255,255)", CX, H * 0.82 + 45, true);
+  }
+}
+
+// ============================================================
+// 主循环
+// ============================================================
+let lastTime = performance.now();
+
+function frame(now) {
+  let dt = now - lastTime;
+  lastTime = now;
+  if (dt > 100) dt = 100;
+
+  const wrap = modeIndex === 1;
+  const boost = gameState === "PLAYING" && spaceHeld;
+
+  // ---- 逻辑更新 ----
+  if (gameState === "PLAYING") {
+    let stepMs = MOVE_MS_BASE / SPEED_MULT[speedIndex];
+    if (boost) stepMs /= BOOST_FACTOR;
+    moveTimer += dt;
+    if (moveTimer > stepMs * 2) moveTimer = stepMs;
+    if (moveTimer >= stepMs) {
+      moveTimer -= stepMs;
+
+      snake.update(wrap);
+
+      // 吃食物
+      let eaten = false;
+      for (let i = foods.length - 1; i >= 0; i--) {
+        if (snake.body[0][0] === foods[i].position[0] && snake.body[0][1] === foods[i].position[1]) {
+          foods.splice(i, 1);
+          score += 10;
+          stats.apples++;
+          eaten = true;
+        }
+      }
+      if (eaten) {
+        playEat();
+        if (foods.length === 0) {
+          foods.push(new Food(snake.body.concat(foods.map(f => f.position))));
+        }
+        if (score % 50 === 0) {
+          MOVE_MS_BASE = Math.max(45, MOVE_MS_BASE - (1000 / INITIAL_SPEED) * 0.12);
+        }
+      } else {
+        snake.body.pop();
+      }
+
+      if (snake.checkCollision(wrap)) {
+        playDie();
+        gameState = "GAME_OVER";
+      } else if (score >= WIN_SCORE) {
+        playWin();
+        gameState = "WIN";
+      } else {
+        // ---- 随机小蛇移动 ----
+        const playerHeadCell = snake.body[0];
+        for (const npc of npcSnakes) {
+          const occ = foods.map(f => f.position).concat([playerHeadCell]);
+          for (const other of npcSnakes) {
+            if (other !== npc) for (const p of other.body) occ.push(p);
+          }
+          npc.update(occ, wrap);
+        }
+
+        // ---- 小蛇碰撞判定 ----
+        const playerHead = snake.body[0];
+        const playerBody = new Set(snake.body.slice(1).map(p => p[0] + "," + p[1]));
+        const deadNpcs = [];
+        let died = false;
+        for (const npc of npcSnakes) {
+          if (npc.body.some(p => p[0] === playerHead[0] && p[1] === playerHead[1])) {
+            gameState = "GAME_OVER";
+            died = true;
+            break;
+          }
+          if (playerBody.has(npc.body[0][0] + "," + npc.body[0][1])) deadNpcs.push(npc);
+        }
+        if (!died) {
+          for (const npc of deadNpcs) {
+            const deadHead = npc.body[0];
+            npcSnakes.splice(npcSnakes.indexOf(npc), 1);
+            stats.kills++;
+            playKill();
+            const occ = new Set(snake.body.map(p => p[0] + "," + p[1]));
+            for (const f of foods) occ.add(f.position[0] + "," + f.position[1]);
+            for (const o of npcSnakes) for (const p of o.body) occ.add(p[0] + "," + p[1]);
+            const [hx, hy] = deadHead;
+            const near = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]
+              .map(([dx, dy]) => [hx + dx * BLOCK, hy + dy * BLOCK]);
+            const spots = [];
+            for (const cell of near) {
+              if (spots.length >= 2) break;
+              const key = cell[0] + "," + cell[1];
+              if (cell[0] >= 0 && cell[0] < W && cell[1] >= 0 && cell[1] < H &&
+                  !occ.has(key) && !spots.some(s => s[0] === cell[0] && s[1] === cell[1])) {
+                spots.push(cell);
+              }
+            }
+            while (spots.length < 2) {
+              const tmp = new Food([...occ].map(s => s.split(",").map(Number)));
+              spots.push(tmp.position);
+            }
+            for (const sp of spots) {
+              foods.push(new Food(null, sp));
+              occ.add(sp[0] + "," + sp[1]);
+            }
+            npcSnakes = npcSnakes.concat(createNPCSnakes(snake, foods, npcSnakes, 1, npcPool));
+          }
+        }
+      }
+    }
+  }
+
+  // ---- 渲染 ----
+  ctx.drawImage(bgCanvas, 0, 0);
+  if (gameState === "START") drawStart();
+  else drawPlaying();
+  drawAttribution();
+
+  requestAnimationFrame(frame);
+}
+
+canvas.focus();
+window.addEventListener("load", () => canvas.focus());
+document.addEventListener("click", () => canvas.focus());
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

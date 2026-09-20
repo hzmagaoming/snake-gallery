@@ -1,0 +1,1967 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EMERGENCY RUN 应急行动</title>
+<style>
+    html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #3a3a33;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+    }
+    #game {
+        outline: none;
+        border-radius: 6px;
+        box-shadow: 0 12px 34px rgba(0,0,0,0.45);
+        cursor: default;
+    }
+</style>
+</head>
+<body>
+<canvas id="game" width="1100" height="720" tabindex="0"></canvas>
+<script>
+"use strict";
+/* ============================================================
+ * EMERGENCY RUN 应急行动 —— HTML5 Canvas 移植版
+ * 原作：吴桐雨（pygame）  移植：忠实保留核心玩法
+ * by 吴桐雨
+ * ============================================================ */
+
+// ---------- 常量（对应 config.py） ----------
+const WINDOW_WIDTH = 1100, WINDOW_HEIGHT = 720;
+const BOARD_SIZE = 600, GRID_SIZE = 18, CELL_SIZE = Math.floor(BOARD_SIZE / GRID_SIZE); // 33
+const BOARD_X = 35, BOARD_Y = 85, HUD_X = 680;
+
+const INITIAL_MOVE_INTERVAL_MS = 210;
+const MIN_MOVE_INTERVAL_MS = 100;
+const SKILL_COOLDOWN_SECONDS = 10;
+const SKILL_DURATION_SECONDS = 3;
+const EVENT_DURATIONS_SECONDS = { earthquake: 3.0, communication: 4.0, rain: 5.0 };
+const EARTHQUAKE_SHAKE_PIXELS = 5;
+const RAIN_WATER_CELL_COUNT = 4;
+const RADIO_DURATION_SECONDS = 2.0;
+const RADIO_COOLDOWN_RANGE = [15, 30];
+const RADIO_EASTER_EGG_CHANCE = 0.06;
+const RADIO_EASTER_EGG_MESSAGES = [
+    "求是鹰：已空投热茶和备用路线图。",
+    "后勤组：你们的路线像教科书一样稳。",
+    "指挥中心：保持呼吸，下一段路会更顺。",
+];
+const RADIO_MESSAGES = [
+    "指挥中心：前方发现受困群众。",
+    "收到，安置点已经开放。",
+    "注意，余震风险正在升高。",
+    "做得好，人已经安全送达。",
+    "指挥中心：道路通行情况已复核。",
+];
+
+const INITIAL_TEAM = [[9, 10], [8, 10], [7, 10]];
+const INITIAL_DIRECTION = [1, 0];
+const MAX_ROUTE_POINTS = 100;
+
+const INITIAL_RESOURCES = 7;
+const INITIAL_SURVIVORS = 3;
+const SAFE_ZONE_COUNT = 3;
+const SAFE_ZONE_RELOCATION_WARNING_SECONDS = 5.0;
+const SAFE_ZONE_RELOCATION_RESCUES = 2;
+const SAFE_ZONE_RELOCATION_MIN_DISTANCE = 4;
+const SAFE_ZONE_RELOCATION_MAX_DISTANCE = 10;
+const START_PROTECTION_SECONDS = 10;
+const START_PROTECTION_RADIUS = 4;
+
+const TUTORIAL_FIRST_WINDOW_SECONDS = 20;
+const TUTORIAL_TOTAL_SECONDS = 60;
+const TUTORIAL_SURVIVOR_POS = [11, 10];
+const TUTORIAL_SAFE_ZONE_POS = [14, 10];
+const TUTORIAL_EXTRA_SAFE_ZONES = [[14, 7], [12, 13]];
+const TUTORIAL_OBSTACLES = [[5, 5], [6, 13]];
+const TUTORIAL_RESOURCES = [[10, 7], [12, 12]];
+const TUTORIAL_RESCUE_SCORE = 5;
+
+const DIFFICULTY_STAGES = [
+    { name: "熟悉现场", start: 0,   move_interval: 260, max_obstacles: 2,  event_interval: null,    event_kinds: [],                                   event_obstacles: 0, water_cells: 0, survivor_min_distance: 2, survivor_max_distance: 6,  rescue_score: 5 },
+    { name: "展开救援", start: 60,  move_interval: 220, max_obstacles: 5,  event_interval: [22, 30], event_kinds: ["earthquake"],                      event_obstacles: 1, water_cells: 2, survivor_min_distance: 3, survivor_max_distance: 8,  rescue_score: 8 },
+    { name: "风险升级", start: 120, move_interval: 195, max_obstacles: 8,  event_interval: [10, 16], event_kinds: ["earthquake", "communication", "rain"], event_obstacles: 2, water_cells: 3, survivor_min_distance: 5, survivor_max_distance: 12, rescue_score: 12 },
+    { name: "高压响应", start: 210, move_interval: 175, max_obstacles: 12, event_interval: [7, 12],  event_kinds: ["earthquake", "communication", "rain"], event_obstacles: 3, water_cells: 5, survivor_min_distance: 7, survivor_max_distance: 30, rescue_score: 18 },
+];
+
+const BATTERY_MIN_RISK_LEVEL = 3;
+const BATTERY_SPAWN_CHANCE = 0.2;
+const MEDICAL_SPAWN_CHANCE = 0.15;
+const EAGLE_SPAWN_CHANCE = 0.03;
+const EAGLE_SUPPORT_SECONDS = 4.0;
+const RESOURCE_SCORE = 1;
+const EAGLE_RESOURCE_VALUE = 2;
+const RESOURCE_DELIVERY_SCORE = 2;
+const RESCUE_STREAK_SIZE = 3;
+const RESCUE_STREAK_BONUS = 2;
+const LOAD_SPEED_PENALTY_MS = 7;
+
+const COLORS = {
+    paper: [238, 236, 219], paper_warm: [244, 239, 220], paper_green: [225, 228, 211],
+    paper_blue: [224, 228, 222], paper_shadow: [139, 143, 123], ink: [66, 70, 56],
+    pencil: [122, 124, 107], grid: [205, 218, 202], river: [186, 205, 208],
+    river_dark: [94, 124, 128], vehicle: [222, 104, 73], survivor_skin: [247, 203, 172],
+    tent: [146, 164, 123], tent_dark: [75, 112, 81], supply_box: [217, 156, 78],
+    medical: [253, 250, 238], rubble: [172, 137, 113], water: [125, 157, 164],
+    water_edge: [73, 108, 120], eagle: [204, 177, 109], eagle_dark: [120, 94, 48],
+    danger: [204, 82, 62],
+};
+const SPRITE_SIZE = { rescue: 43, body: 35, person: 44, tent: 48, resource: 38, rubble: 39 };
+const FONT = { title: 40, body: 24, small: 16, mini: 13 };
+
+const SCENARIOS = [
+    { title: "山区暴雨", background_theme: "rain",       intro: "持续降雨导致部分道路中断，救援队正在转移受困群众。", event_bias: "rain" },
+    { title: "地震余震", background_theme: "earthquake", intro: "部分建筑受损，请优先搜救并送往临时安置点。",         event_bias: "earthquake" },
+    { title: "城区内涝", background_theme: "flood",      intro: "积水正在扩大，请及时完成物资运输与人员转移。",       event_bias: "rain" },
+];
+const SCENARIO_BACKGROUNDS = {
+    rain: ["river_valley", "wet_hillside", "mountain_bend"],
+    earthquake: ["damaged_district", "relief_corridor", "dusty_crossroads"],
+    flood: ["canal_street", "flooded_square", "riverside_blocks"],
+};
+const GAME_OVER_MESSAGES = [
+    "路线规划很稳，记得永远为自己留一条撤离路线。",
+    "这次行动很有分寸，下一次要更快完成转移。",
+    "救援现场很拼，接下来继续保护队列与撤离路线。",
+    "危机不止一次，记住安全线与资源线的关系。",
+];
+
+const SAVE_KEY = "sg-l1-wutongyu-save";
+
+// ---------- 工具 ----------
+function rgb(c, a) {
+    return a === undefined ? `rgb(${c[0]},${c[1]},${c[2]})` : `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+}
+function randInt(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
+function choice(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function cellEq(a, b) { return a[0] === b[0] && a[1] === b[1]; }
+function inCells(list, x, y) { return list.some(c => c[0] === x && c[1] === y); }
+
+// ---------- 存档（localStorage 替代 save.json） ----------
+function loadSave() {
+    try {
+        const raw = localStorage.getItem(SAVE_KEY);
+        if (raw) {
+            const d = JSON.parse(raw);
+            return {
+                best_score: Math.max(0, parseInt(d.best_score) || 0),
+                best_rescued: Math.max(0, parseInt(d.best_rescued) || 0),
+                tutorial_completed: !!d.tutorial_completed,
+            };
+        }
+    } catch (e) { /* ignore */ }
+    return { best_score: 0, best_rescued: 0, tutorial_completed: false };
+}
+function writeSave(d) {
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(d)); } catch (e) { /* ignore */ }
+}
+
+// ---------- 音效（WebAudio oscillator） ----------
+let audioCtx = null;
+function ensureAudio() {
+    if (!audioCtx) {
+        try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { audioCtx = null; }
+    }
+    if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+}
+function beep(freq, dur, type, gain, when) {
+    if (!audioCtx) return;
+    type = type || "sine"; gain = gain || 0.08; when = when || 0;
+    const t0 = audioCtx.currentTime + when;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = type; osc.frequency.value = freq;
+    g.gain.setValueAtTime(gain, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    osc.connect(g); g.connect(audioCtx.destination);
+    osc.start(t0); osc.stop(t0 + dur + 0.02);
+}
+const sfx = {
+    pickup()   { beep(660, 0.12, "triangle", 0.09); beep(880, 0.1, "triangle", 0.06, 0.08); },
+    deliver()  { beep(523, 0.12, "sine", 0.1); beep(659, 0.12, "sine", 0.1, 0.1); beep(784, 0.2, "sine", 0.1, 0.2); },
+    resource() { beep(740, 0.08, "square", 0.04); },
+    warning()  { beep(220, 0.25, "square", 0.07); beep(196, 0.3, "square", 0.07, 0.28); },
+    skill()    { beep(880, 0.15, "sine", 0.07); beep(1174, 0.18, "sine", 0.05, 0.12); },
+    gameover() { beep(392, 0.25, "sawtooth", 0.06); beep(311, 0.3, "sawtooth", 0.06, 0.25); beep(233, 0.5, "sawtooth", 0.06, 0.55); },
+    click()    { beep(520, 0.06, "triangle", 0.06); },
+};
+
+// ---------- 画布 ----------
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const FONT_FAMILY = '"Hiragino Sans GB","PingFang SC","Microsoft YaHei",sans-serif';
+function font(size, bold) { return `${bold ? "bold " : ""}${size}px ${FONT_FAMILY}`; }
+
+function fitCanvas() {
+    const scale = Math.min(window.innerWidth / WINDOW_WIDTH, window.innerHeight / WINDOW_HEIGHT);
+    canvas.style.width = Math.floor(WINDOW_WIDTH * scale) + "px";
+    canvas.style.height = Math.floor(WINDOW_HEIGHT * scale) + "px";
+}
+window.addEventListener("resize", fitCanvas);
+fitCanvas();
+
+// ---------- 资源加载与切片 ----------
+const ASSET_BASE = "../../../assets/wutongyu/";
+const IMG = {};
+const SPRITES = {};   // kind -> canvas(108x108)
+const BACKGROUNDS = {}; // theme -> [variant0, variant1, variant2] 600x600 canvas
+let paperTexture = null;
+let assetsReady = false;
+
+function loadImage(src) {
+    return new Promise((resolve) => {
+        const im = new Image();
+        im.onload = () => resolve(im);
+        im.onerror = () => resolve(null);
+        im.src = src;
+    });
+}
+
+function makeCanvas(w, h) {
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    return c;
+}
+
+// 洋红键控 + 包围盒裁剪 + 归一化到 108x108
+function keyAndCrop(source, sx, sy, sw, sh) {
+    const tile = makeCanvas(sw, sh);
+    const tctx = tile.getContext("2d");
+    tctx.drawImage(source, sx, sy, sw, sh, 0, 0, sw, sh);
+    const id = tctx.getImageData(0, 0, sw, sh);
+    const d = id.data;
+    let minX = sw, minY = sh, maxX = -1, maxY = -1;
+    for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+            const i = (y * sw + x) * 4;
+            const r = d[i], g = d[i + 1], b = d[i + 2];
+            if (r > 180 && g < 90 && b > 180) { d[i + 3] = 0; continue; }
+            if (d[i + 3] > 30) {
+                if (x < minX) minX = x; if (x > maxX) maxX = x;
+                if (y < minY) minY = y; if (y > maxY) maxY = y;
+            }
+        }
+    }
+    tctx.putImageData(id, 0, 0);
+    const out = makeCanvas(108, 108);
+    if (maxX < 0) return out;
+    const bw = maxX - minX + 1, bh = maxY - minY + 1;
+    const scale = Math.min(92 / bw, 92 / bh);
+    const dw = Math.max(1, Math.round(bw * scale)), dh = Math.max(1, Math.round(bh * scale));
+    const octx = out.getContext("2d");
+    octx.imageSmoothingQuality = "high";
+    octx.drawImage(tile, minX, minY, bw, bh, Math.round((108 - dw) / 2), Math.round((108 - dh) / 2), dw, dh);
+    return out;
+}
+
+async function loadAssets() {
+    const [cover, rain, quake, flood, spr] = await Promise.all([
+        loadImage(ASSET_BASE + "menu_cover.png"),
+        loadImage(ASSET_BASE + "world_rain.png"),
+        loadImage(ASSET_BASE + "world_earthquake.png"),
+        loadImage(ASSET_BASE + "world_flood.png"),
+        loadImage(ASSET_BASE + "world_sprites.png"),
+    ]);
+    IMG.cover = cover;
+    const sheets = { rain, earthquake: quake, flood };
+    for (const theme of Object.keys(sheets)) {
+        const sheet = sheets[theme];
+        if (!sheet) continue;
+        const tw = Math.floor(sheet.width / 2), th = Math.floor(sheet.height / 2);
+        BACKGROUNDS[theme] = [];
+        for (let v = 0; v < 3; v++) {
+            const bg = makeCanvas(BOARD_SIZE, BOARD_SIZE);
+            const bctx = bg.getContext("2d");
+            bctx.imageSmoothingQuality = "high";
+            bctx.fillStyle = "rgb(231,235,218)";
+            bctx.fillRect(0, 0, BOARD_SIZE, BOARD_SIZE);
+            bctx.drawImage(sheet, (v % 2) * tw, Math.floor(v / 2) * th, tw, th, 0, 0, BOARD_SIZE, BOARD_SIZE);
+            bctx.fillStyle = "rgba(231,235,218,0.39)";
+            bctx.fillRect(0, 0, BOARD_SIZE, BOARD_SIZE);
+            BACKGROUNDS[theme].push(bg);
+        }
+        if (theme === "rain") {
+            paperTexture = makeCanvas(tw, th);
+            paperTexture.getContext("2d").drawImage(sheet, tw, th, tw, th, 0, 0, tw, th);
+        }
+    }
+    if (spr) {
+        const kinds = ["rescue", "cargo", "transport", "logistics", "person", "tent",
+                       "supply", "medical", "battery", "eagle", "rubble"];
+        const tw = Math.floor(spr.width / 4), th = Math.floor(spr.height / 3);
+        kinds.forEach((kind, i) => {
+            SPRITES[kind] = keyAndCrop(spr, (i % 4) * tw, Math.floor(i / 4) * th, tw, th);
+        });
+    }
+    assetsReady = true;
+}
+</script>
+<script>
+"use strict";
+/* ================== 游戏主逻辑（移植自 game.py） ================== */
+
+const STATE = { MENU: 0, MISSION_BRIEF: 1, GUIDE: 2, PLAYING: 3, PAUSED: 4, GAME_OVER: 5 };
+
+const game = {
+    state: STATE.MENU,
+    running: true,
+    scenario: choice(SCENARIOS),
+    gameOverMessage: choice(GAME_OVER_MESSAGES),
+    gameOverRank: "救援先锋",
+    saveData: loadSave(),
+    tutorialCompleted: false,
+    forceTutorial: false,
+    tutorialMode: false,
+    tutorialPickedSurvivor: false,
+    tutorialRescueDone: false,
+    tutorialEHintShown: false,
+    tutorialSecondHintShown: false,
+    stageIndex: 0,
+    announcedStages: new Set(),
+    obstacleGrowthTimer: 0,
+    lastSafeZoneRescueMilestone: 0,
+    safeZoneRelocationTimer: 0,
+    safeZoneRelocationPending: false,
+    eagleSupportTimer: 0,
+    streakBonusTimer: 0,
+    radioMessage: "",
+    radioTimer: 0,
+    radioCooldown: randInt(...RADIO_COOLDOWN_RANGE),
+    radioAlive: false,
+
+    startedAtMs: performance.now(),
+    score: 0,
+    rescued: 0,
+    resourcesCollected: 0,
+    riskLevel: 1,
+    riskText: "Ⅰ级 关注",
+
+    team: INITIAL_TEAM.map(c => c.slice()),
+    direction: INITIAL_DIRECTION.slice(),
+    nextDirection: INITIAL_DIRECTION.slice(),
+    route: [INITIAL_TEAM[0].slice()],
+
+    resources: [],   // {kind, x, y}
+    survivors: [],   // {x, y, carried}
+    safeZones: [],   // {x, y}
+    obstacles: [],   // [x,y]
+    water: [],
+    event: null,     // {kind, duration, text, timer}
+    inventory: [],
+    onboardSurvivors: [],
+    moveTimer: 0,
+    moveInterval: INITIAL_MOVE_INTERVAL_MS,
+    eventCooldown: 9999,
+    skillCooldown: 0,
+    skillTimer: 0,
+    message: "应急行动待命",
+    messageTimer: 0,
+    showHud: true,
+
+    // 视觉插值
+    previousPositions: INITIAL_TEAM.map(c => c.slice()),
+    targetPositions: INITIAL_TEAM.map(c => c.slice()),
+    visualElapsedMs: 0,
+    visualMoveIntervalMs: INITIAL_MOVE_INTERVAL_MS,
+
+    backgroundVariantIndex: 0,
+    quitHintTimer: 0,
+};
+game.tutorialCompleted = game.saveData.tutorial_completed;
+
+function elapsedSeconds() {
+    return Math.max(0, Math.floor((performance.now() - game.startedAtMs) / 1000));
+}
+
+function currentStage() {
+    const el = elapsedSeconds();
+    let cur = DIFFICULTY_STAGES[0];
+    for (const st of DIFFICULTY_STAGES) if (el >= st.start) cur = st;
+    return cur;
+}
+
+function updateRisk() {
+    game.riskLevel = game.stageIndex + 1;
+    game.riskText = { 1: "Ⅰ级 关注", 2: "Ⅱ级 警戒", 3: "Ⅲ级 严重", 4: "Ⅳ级 特别严重" }[game.riskLevel];
+}
+
+function resetVehicleMotion() {
+    game.previousPositions = game.team.map(c => c.slice());
+    game.targetPositions = game.team.map(c => c.slice());
+    game.visualElapsedMs = 0;
+    game.visualMoveIntervalMs = game.moveInterval;
+}
+
+function resetEventCooldown() {
+    const interval = currentStage().event_interval;
+    game.eventCooldown = interval === null ? 9999 : randInt(interval[0], interval[1]);
+}
+
+function resetGame(tutorialMode, scenario) {
+    game.tutorialMode = !!tutorialMode;
+    game.tutorialPickedSurvivor = false;
+    game.tutorialRescueDone = false;
+    game.tutorialEHintShown = false;
+    game.tutorialSecondHintShown = false;
+    game.stageIndex = 0;
+    game.announcedStages = new Set([0]);
+    game.obstacleGrowthTimer = 0;
+    game.lastSafeZoneRescueMilestone = 0;
+    game.safeZoneRelocationTimer = 0;
+    game.safeZoneRelocationPending = false;
+    game.eagleSupportTimer = 0;
+    game.streakBonusTimer = 0;
+    game.score = 0;
+    game.rescued = 0;
+    game.resourcesCollected = 0;
+    game.team = INITIAL_TEAM.map(c => c.slice());
+    game.direction = INITIAL_DIRECTION.slice();
+    game.nextDirection = INITIAL_DIRECTION.slice();
+    game.route = [INITIAL_TEAM[0].slice()];
+    game.resources = [];
+    game.survivors = [];
+    game.safeZones = [];
+    game.obstacles = [];
+    game.water = [];
+    game.event = null;
+    game.inventory = [];
+    game.scenario = scenario !== undefined ? scenario : choice(SCENARIOS);
+    const variants = SCENARIO_BACKGROUNDS[game.scenario.background_theme];
+    game.backgroundVariantIndex = Math.floor(Math.random() * variants.length);
+    game.gameOverMessage = choice(GAME_OVER_MESSAGES);
+    game.gameOverRank = "救援先锋";
+    game.radioMessage = "";
+    game.radioTimer = 0;
+    game.radioCooldown = randInt(...RADIO_COOLDOWN_RANGE);
+    game.radioAlive = false;
+    game.startedAtMs = performance.now();
+    game.onboardSurvivors = [];
+    game.moveTimer = 0;
+    game.moveInterval = INITIAL_MOVE_INTERVAL_MS;
+    resetVehicleMotion();
+    resetEventCooldown();
+    game.skillCooldown = 0;
+    game.skillTimer = 0;
+    game.message = "应急行动待命";
+    game.messageTimer = 0;
+    game.showHud = true;
+    updateRisk();
+
+    if (game.tutorialMode) {
+        game.safeZones = [{ x: TUTORIAL_SAFE_ZONE_POS[0], y: TUTORIAL_SAFE_ZONE_POS[1] },
+            ...TUTORIAL_EXTRA_SAFE_ZONES.map(p => ({ x: p[0], y: p[1] }))];
+        game.survivors = [{ x: TUTORIAL_SURVIVOR_POS[0], y: TUTORIAL_SURVIVOR_POS[1], carried: false }];
+        game.resources = TUTORIAL_RESOURCES.map(p => ({ kind: "supply", x: p[0], y: p[1] }));
+        game.obstacles = TUTORIAL_OBSTACLES.map(p => p.slice());
+        game.message = "先前往这里，接触受困群众";
+        game.messageTimer = 8.0;
+    } else {
+        makeSafeZones();
+        spawnObstacles(currentStage().max_obstacles);
+        spawnResources(INITIAL_RESOURCES);
+        spawnSurvivors(INITIAL_SURVIVORS);
+    }
+    game.state = STATE.PLAYING;
+}
+
+function startFromMenu(forceTutorial) {
+    game.forceTutorial = !!forceTutorial;
+    game.scenario = choice(SCENARIOS);
+    game.state = STATE.MISSION_BRIEF;
+}
+
+function distanceFromHead(x, y) {
+    const [hx, hy] = game.team[0];
+    return Math.abs(x - hx) + Math.abs(y - hy);
+}
+
+function inStartProtection(x, y) {
+    return elapsedSeconds() < START_PROTECTION_SECONDS && distanceFromHead(x, y) <= START_PROTECTION_RADIUS;
+}
+
+function cellBlocked(x, y) {
+    if (inCells(game.team, x, y)) return true;
+    if (inCells(game.obstacles, x, y)) return true;
+    if (game.safeZones.some(s => s.x === x && s.y === y)) return true;
+    if (game.resources.some(r => r.x === x && r.y === y)) return true;
+    if (game.survivors.some(s => s.x === x && s.y === y)) return true;
+    return false;
+}
+
+function randomNearHead(minD, maxD) {
+    const [hx, hy] = game.team[0];
+    const cands = [];
+    for (let y = 1; y < GRID_SIZE - 1; y++) for (let x = 1; x < GRID_SIZE - 1; x++) {
+        const d = Math.abs(x - hx) + Math.abs(y - hy);
+        if (d >= minD && d <= maxD) cands.push([x, y]);
+    }
+    return cands.length ? choice(cands) : [hx, hy];
+}
+
+function makeSafeZones() {
+    game.safeZones = [];
+    let attempts = 0;
+    const stage = currentStage();
+    while (game.safeZones.length < SAFE_ZONE_COUNT && attempts < 200) {
+        attempts++;
+        let x, y;
+        if (game.safeZones.length === 0 && stage.survivor_max_distance <= 8) {
+            [x, y] = randomNearHead(4, 7);
+        } else {
+            x = randInt(2, GRID_SIZE - 3);
+            y = randInt(2, GRID_SIZE - 3);
+        }
+        if (inCells(game.team, x, y) || inCells(game.obstacles, x, y)) continue;
+        if (game.safeZones.some(s => s.x === x && s.y === y)) continue;
+        game.safeZones.push({ x, y });
+    }
+}
+
+function freeCellsForObstacles() {
+    const outs = [];
+    for (let y = 1; y < GRID_SIZE - 1; y++) for (let x = 1; x < GRID_SIZE - 1; x++) {
+        if (inStartProtection(x, y)) continue;
+        if (inCells(game.obstacles, x, y)) continue;
+        if (inCells(game.team, x, y)) continue;
+        if (game.safeZones.some(s => s.x === x && s.y === y)) continue;
+        if (game.survivors.some(s => s.x === x && s.y === y)) continue;
+        if (game.resources.some(r => r.x === x && r.y === y)) continue;
+        outs.push([x, y]);
+    }
+    return outs;
+}
+
+function spawnObstacles(count) {
+    for (let i = 0; i < count; i++) {
+        const free = freeCellsForObstacles();
+        if (!free.length) break;
+        game.obstacles.push(choice(free));
+    }
+}
+
+function spawnResources(count) {
+    for (let i = 0; i < count; i++) {
+        const free = [];
+        for (let y = 1; y < GRID_SIZE - 1; y++) for (let x = 1; x < GRID_SIZE - 1; x++) {
+            if (!cellBlocked(x, y)) free.push([x, y]);
+        }
+        if (!free.length) break;
+        const [x, y] = choice(free);
+        let kind;
+        if (game.riskLevel >= BATTERY_MIN_RISK_LEVEL && Math.random() < BATTERY_SPAWN_CHANCE) kind = "battery";
+        else if (Math.random() < MEDICAL_SPAWN_CHANCE) kind = "medical";
+        else if (Math.random() < EAGLE_SPAWN_CHANCE) kind = "eagle";
+        else kind = "supply";
+        game.resources.push({ kind, x, y });
+    }
+}
+
+function freeSpawnCells() {
+    const free = [];
+    for (let y = 1; y < GRID_SIZE - 1; y++) for (let x = 1; x < GRID_SIZE - 1; x++) {
+        if (!cellBlocked(x, y)) free.push([x, y]);
+    }
+    return free;
+}
+
+function spawnSurvivors(count) {
+    const stage = currentStage();
+    for (let i = 0; i < count; i++) {
+        let free = [];
+        for (let y = 1; y < GRID_SIZE - 1; y++) for (let x = 1; x < GRID_SIZE - 1; x++) {
+            if (cellBlocked(x, y)) continue;
+            const d = distanceFromHead(x, y);
+            if (d < stage.survivor_min_distance || d > stage.survivor_max_distance) continue;
+            free.push([x, y]);
+        }
+        if (!free.length) free = freeSpawnCells();
+        if (!free.length) break;
+        const [x, y] = choice(free);
+        game.survivors.push({ x, y, carried: false });
+    }
+}
+</script>
+<script>
+"use strict";
+/* ================== 更新逻辑 ================== */
+
+function updateStage() {
+    const stage = currentStage();
+    const newIndex = DIFFICULTY_STAGES.indexOf(stage);
+    if (newIndex > game.stageIndex) {
+        game.stageIndex = newIndex;
+        if (!game.announcedStages.has(newIndex)) {
+            game.announcedStages.add(newIndex);
+            game.message = "风险等级提升：现场情况正在恶化";
+            game.messageTimer = 3.0;
+        }
+        resetEventCooldown();
+        updateRisk();
+        scheduleSafeZoneRelocation();
+    }
+}
+
+function updateTutorialHints() {
+    if (!game.tutorialMode) return;
+    const el = elapsedSeconds();
+    if (game.tutorialRescueDone && !game.tutorialSecondHintShown &&
+        el >= TUTORIAL_FIRST_WINDOW_SECONDS && el < TUTORIAL_TOTAL_SECONDS) {
+        game.tutorialSecondHintShown = true;
+        game.message = "继续搜救第二名群众，或先回安全区";
+        game.messageTimer = 4.0;
+    }
+}
+
+function spawnObstacleSafe() {
+    if (game.obstacles.length >= currentStage().max_obstacles) return;
+    const free = [];
+    for (let y = 1; y < GRID_SIZE - 1; y++) for (let x = 1; x < GRID_SIZE - 1; x++) {
+        if (inStartProtection(x, y)) continue;
+        if (inCells(game.team, x, y)) continue;
+        if (inCells(game.obstacles, x, y)) continue;
+        if (game.safeZones.some(s => s.x === x && s.y === y)) continue;
+        if (game.survivors.some(s => s.x === x && s.y === y)) continue;
+        if (game.resources.some(r => r.x === x && r.y === y)) continue;
+        free.push([x, y]);
+    }
+    if (free.length) game.obstacles.push(choice(free));
+}
+
+function growObstacles(dt) {
+    if (elapsedSeconds() < TUTORIAL_FIRST_WINDOW_SECONDS) return;
+    const target = currentStage().max_obstacles;
+    if (game.obstacles.length >= target) return;
+    game.obstacleGrowthTimer += dt;
+    if (game.obstacleGrowthTimer >= 8.0) {
+        spawnObstacleSafe();
+        game.obstacleGrowthTimer = 0;
+    }
+}
+
+function eventsAllowed() {
+    const stage = currentStage();
+    return elapsedSeconds() >= TUTORIAL_TOTAL_SECONDS && stage.event_kinds.length > 0;
+}
+
+function scheduleSafeZoneRelocation() {
+    if ((game.tutorialMode && elapsedSeconds() < TUTORIAL_TOTAL_SECONDS) ||
+        game.safeZoneRelocationPending || game.safeZones.length < 2) return;
+    game.safeZoneRelocationPending = true;
+    game.safeZoneRelocationTimer = SAFE_ZONE_RELOCATION_WARNING_SECONDS;
+    game.message = "临时安置点即将调整";
+    game.messageTimer = SAFE_ZONE_RELOCATION_WARNING_SECONDS;
+}
+
+function updateSafeZoneRelocation(dt) {
+    if (!game.safeZoneRelocationPending) return;
+    game.safeZoneRelocationTimer -= dt;
+    if (game.safeZoneRelocationTimer <= 0) {
+        relocateSafeZone();
+        game.safeZoneRelocationPending = false;
+        game.safeZoneRelocationTimer = 0;
+    }
+}
+
+function safeZoneToClose() {
+    if (!game.safeZones.length) return null;
+    const [hx, hy] = game.team[0];
+    let best = null, bestD = -1;
+    for (const z of game.safeZones) {
+        const d = Math.abs(z.x - hx) + Math.abs(z.y - hy);
+        if (d > bestD) { bestD = d; best = z; }
+    }
+    return best;
+}
+
+function reachableCells() {
+    const start = game.team[0];
+    const blocked = new Set();
+    for (const o of game.obstacles) blocked.add(o[0] + "," + o[1]);
+    for (const w of game.water) blocked.add(w[0] + "," + w[1]);
+    for (let i = 1; i < game.team.length; i++) blocked.add(game.team[i][0] + "," + game.team[i][1]);
+    const visited = new Set([start[0] + "," + start[1]]);
+    const frontier = [start];
+    while (frontier.length) {
+        const [x, y] = frontier.shift();
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nx = x + dx, ny = y + dy, key = nx + "," + ny;
+            if (nx < 1 || nx >= GRID_SIZE - 1 || ny < 1 || ny >= GRID_SIZE - 1) continue;
+            if (visited.has(key) || blocked.has(key)) continue;
+            visited.add(key);
+            frontier.push([nx, ny]);
+        }
+    }
+    return visited;
+}
+
+function findReachableSafeZonePosition() {
+    const reachable = reachableCells();
+    let candidates = [];
+    for (const key of reachable) {
+        const [x, y] = key.split(",").map(Number);
+        const d = distanceFromHead(x, y);
+        if (d < SAFE_ZONE_RELOCATION_MIN_DISTANCE || d > SAFE_ZONE_RELOCATION_MAX_DISTANCE) continue;
+        if (cellBlocked(x, y)) continue;
+        if (game.safeZones.some(z => z.x === x && z.y === y)) continue;
+        candidates.push([x, y]);
+    }
+    if (!candidates.length) {
+        candidates = [];
+        for (const key of reachable) {
+            const [x, y] = key.split(",").map(Number);
+            if (cellBlocked(x, y)) continue;
+            if (game.safeZones.some(z => z.x === x && z.y === y)) continue;
+            candidates.push([x, y]);
+        }
+    }
+    return candidates.length ? choice(candidates) : null;
+}
+
+function relocateSafeZone() {
+    const pos = findReachableSafeZonePosition();
+    if (pos === null) {
+        game.message = "安置点调整取消：未找到安全路线";
+        game.messageTimer = 2.0;
+        return;
+    }
+    const oldZone = safeZoneToClose();
+    if (oldZone) game.safeZones = game.safeZones.filter(z => z !== oldZone);
+    game.safeZones.push({ x: pos[0], y: pos[1] });
+    game.message = "新的临时安置点已开放";
+    game.messageTimer = 2.5;
+}
+
+function survivorAt(x, y) {
+    return game.survivors.find(s => !s.carried && s.x === x && s.y === y) || null;
+}
+function resourceAt(x, y) {
+    return game.resources.find(r => r.x === x && r.y === y) || null;
+}
+function isSafeZone(x, y) {
+    return game.safeZones.some(z => z.x === x && z.y === y);
+}
+function nearestSafeZone() {
+    if (!game.safeZones.length) return null;
+    const [hx, hy] = game.team[0];
+    let best = null, bestD = Infinity;
+    for (const z of game.safeZones) {
+        const d = Math.abs(z.x - hx) + Math.abs(z.y - hy);
+        if (d < bestD) { bestD = d; best = z; }
+    }
+    return best;
+}
+
+function inventoryValue() {
+    return game.inventory.reduce((s, it) => s + (it === "eagle" ? EAGLE_RESOURCE_VALUE : RESOURCE_SCORE), 0);
+}
+function pendingLoadCount() {
+    return game.onboardSurvivors.length + game.inventory.length;
+}
+function pendingLoadText() {
+    return `${game.onboardSurvivors.length}人/${inventoryValue()}物资`;
+}
+
+function renderVehiclePositions() {
+    const progress = Math.min(1, game.visualElapsedMs / game.visualMoveIntervalMs);
+    return game.previousPositions.map((old, i) => {
+        const nw = game.targetPositions[i] || old;
+        return [old[0] + (nw[0] - old[0]) * progress, old[1] + (nw[1] - old[1]) * progress];
+    });
+}
+
+function pickSurvivor(survivor) {
+    survivor.carried = true;
+    game.onboardSurvivors.push(survivor);
+    if (game.tutorialMode && !game.tutorialPickedSurvivor) {
+        game.tutorialPickedSurvivor = true;
+        game.message = "群众已上车 → 请前往绿色安置点";
+    } else {
+        game.message = `群众已上车：待转移 ${game.onboardSurvivors.length} 人`;
+    }
+    game.messageTimer = 2.0;
+    sfx.pickup();
+}
+
+function unloadTeamSegments(count) {
+    const minLen = INITIAL_TEAM.length;
+    const removable = Math.max(0, Math.min(count, game.team.length - minLen));
+    for (let i = 0; i < removable; i++) game.team.pop();
+}
+
+function scheduleSafeZoneRelocationAfterRescue() {
+    const milestone = Math.floor(game.rescued / SAFE_ZONE_RELOCATION_RESCUES);
+    if (milestone > game.lastSafeZoneRescueMilestone) {
+        game.lastSafeZoneRescueMilestone = milestone;
+        scheduleSafeZoneRelocation();
+    }
+}
+
+function markTutorialCompleted() {
+    if (game.tutorialCompleted) return;
+    game.tutorialCompleted = true;
+    const data = loadSave();
+    data.tutorial_completed = true;
+    writeSave(data);
+    game.saveData = data;
+}
+
+function completeSafeZoneTransfer() {
+    const deliveredSurvivors = game.onboardSurvivors.length;
+    const deliveredResources = inventoryValue();
+    if (deliveredSurvivors === 0 && deliveredResources === 0) return;
+
+    let rescueScore = currentStage().rescue_score;
+    if (game.tutorialMode && !game.tutorialRescueDone && deliveredSurvivors > 0) {
+        rescueScore = TUTORIAL_RESCUE_SCORE;
+    }
+    let gained = deliveredSurvivors * rescueScore;
+    gained += deliveredResources * RESOURCE_DELIVERY_SCORE;
+    game.score += gained;
+    game.rescued += deliveredSurvivors;
+    game.resourcesCollected += deliveredResources;
+
+    const unloadedItems = deliveredSurvivors + game.inventory.length;
+    game.survivors = game.survivors.filter(s => !game.onboardSurvivors.includes(s));
+    game.onboardSurvivors = [];
+    game.inventory = [];
+    unloadTeamSegments(unloadedItems);
+
+    if (game.tutorialMode && !game.tutorialRescueDone && deliveredSurvivors > 0) {
+        game.tutorialRescueDone = true;
+        markTutorialCompleted();
+        game.message = "救援完成 +5：现在你已经掌握基本救援流程";
+        game.messageTimer = 5.0;
+    } else if (deliveredSurvivors > 0 && game.rescued % RESCUE_STREAK_SIZE === 0) {
+        game.score += RESCUE_STREAK_BONUS;
+        game.streakBonusTimer = 3.0;
+        game.message = `连续转移完成：+${gained + RESCUE_STREAK_BONUS}`;
+        game.messageTimer = 3.0;
+    } else {
+        game.message = `安全区结算：+${gained}`;
+        game.messageTimer = 2.2;
+    }
+    sfx.deliver();
+
+    spawnResources(1);
+    spawnSurvivors(1);
+    scheduleSafeZoneRelocationAfterRescue();
+}
+
+function removeRandomObstacle() {
+    if (game.obstacles.length) {
+        game.obstacles.splice(Math.floor(Math.random() * game.obstacles.length), 1);
+    }
+}
+
+function collectResource(r) {
+    const kind = r.kind;
+    if (kind === "supply") {
+        game.inventory.push("supply");
+        game.message = "应急物资已装车，前往安全区结算";
+        game.messageTimer = 1.0;
+    } else if (kind === "battery") {
+        game.inventory.push("battery");
+        removeRandomObstacle();
+        game.message = "通讯电池已装车，清除一处道路障碍";
+        game.messageTimer = 2.0;
+    } else if (kind === "medical") {
+        game.inventory.push("medical");
+        game.message = "医疗包已装车，短时风险扫描";
+        game.messageTimer = 2.0;
+        game.skillTimer = SKILL_DURATION_SECONDS;
+    } else if (kind === "eagle") {
+        game.inventory.push("eagle");
+        removeRandomObstacle();
+        removeRandomObstacle();
+        game.eagleSupportTimer = EAGLE_SUPPORT_SECONDS;
+        game.message = "求是鹰支援：短时清障护航";
+        game.messageTimer = 3.0;
+    }
+    game.resources = game.resources.filter(x => x !== r);
+    sfx.resource();
+}
+
+function isDeadlocked() {
+    const [hx, hy] = game.team[0];
+    let blocked = 0;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = hx + dx, ny = hy + dy;
+        if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) blocked++;
+        else if (inCells(game.obstacles, nx, ny) || inCells(game.team, nx, ny)) blocked++;
+    }
+    return blocked >= 4;
+}
+
+function moveTeam() {
+    let [dx, dy] = game.nextDirection;
+    if (game.team.length > 1 &&
+        cellEq([game.team[0][0] + dx, game.team[0][1] + dy], game.team[1])) {
+        [dx, dy] = game.direction;
+    }
+    game.direction = [dx, dy];
+
+    const oldHead = game.team[0];
+    const nx = oldHead[0] + dx, ny = oldHead[1] + dy;
+
+    if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) {
+        finishGame("应急队驶出地图，响应中断");
+        return false;
+    }
+
+    if (inCells(game.obstacles, nx, ny)) {
+        if (game.eagleSupportTimer > 0) {
+            game.obstacles = game.obstacles.filter(o => !(o[0] === nx && o[1] === ny));
+            game.message = "求是鹰支援：已清开障碍";
+            game.messageTimer = 1.2;
+        } else {
+            finishGame("道路障碍拦截救援队");
+            return false;
+        }
+    }
+
+    if (inCells(game.water, nx, ny) && game.eagleSupportTimer <= 0) {
+        finishGame("积水困住救援队");
+        return false;
+    } else if (inCells(game.water, nx, ny)) {
+        game.message = "求是鹰支援：安全通过积水";
+        game.messageTimer = 1.2;
+    }
+
+    const targetResource = resourceAt(nx, ny);
+    const targetSurvivor = survivorAt(nx, ny);
+    const shouldGrow = targetResource !== null || targetSurvivor !== null;
+    const bodyForCollision = shouldGrow ? game.team.slice(1) : game.team.slice(1, -1);
+    if (inCells(bodyForCollision, nx, ny)) {
+        if (game.eagleSupportTimer > 0) {
+            game.message = "求是鹰支援：队列避险成功";
+            game.messageTimer = 1.2;
+            return false;
+        }
+        finishGame("救援队发生撞线");
+        return false;
+    }
+
+    if (targetResource) collectResource(targetResource);
+    if (targetSurvivor) pickSurvivor(targetSurvivor);
+
+    const previousPositions = renderVehiclePositions();
+    game.team.unshift([nx, ny]);
+    game.route.push([nx, ny]);
+    if (game.route.length > MAX_ROUTE_POINTS) game.route.shift();
+
+    if (!shouldGrow) game.team.pop();
+
+    if (isSafeZone(nx, ny)) completeSafeZoneTransfer();
+
+    game.previousPositions = game.team.map((_, i) =>
+        previousPositions[Math.min(i, previousPositions.length - 1)]);
+    game.targetPositions = game.team.map(c => c.slice());
+    game.visualElapsedMs = 0;
+    game.visualMoveIntervalMs = game.moveInterval;
+
+    if (isDeadlocked()) finishGame("道路封锁，路线无路可走");
+    return true;
+}
+
+function triggerRadioMessage() {
+    if (game.state !== STATE.PLAYING) return;
+    const msg = Math.random() < RADIO_EASTER_EGG_CHANCE
+        ? choice(RADIO_EASTER_EGG_MESSAGES) : choice(RADIO_MESSAGES);
+    game.radioMessage = msg;
+    game.radioTimer = RADIO_DURATION_SECONDS;
+    game.radioAlive = true;
+}
+
+function spawnWaterCells(count) {
+    game.water = [];
+    let free = [];
+    for (let y = 1; y < GRID_SIZE - 1; y++) for (let x = 1; x < GRID_SIZE - 1; x++) {
+        if (!cellBlocked(x, y)) free.push([x, y]);
+    }
+    for (let i = 0; i < Math.min(count, free.length); i++) {
+        const idx = Math.floor(Math.random() * free.length);
+        game.water.push(free[idx]);
+        free.splice(idx, 1);
+    }
+}
+
+function startEvent(kind) {
+    const strength = currentStage().event_obstacles;
+    if (kind === "earthquake") {
+        const timing = EVENT_DURATIONS_SECONDS[kind];
+        game.message = "⚠ 余震预警";
+        game.messageTimer = 3.0;
+        game.event = { kind, duration: timing, text: "⚠ 余震预警", timer: timing };
+        for (let i = 0; i < strength; i++) spawnObstacleSafe();
+    } else if (kind === "communication") {
+        game.message = "⚠ 通讯中断";
+        game.messageTimer = 2.0;
+        const d = EVENT_DURATIONS_SECONDS[kind];
+        game.event = { kind, duration: d, text: "⚠ 通讯中断", timer: d };
+        game.showHud = false;
+    } else if (kind === "rain") {
+        game.message = "⚠ 暴雨：积水区域预警";
+        game.messageTimer = 2.0;
+        const d = EVENT_DURATIONS_SECONDS[kind];
+        game.event = { kind, duration: d, text: "⚠ 暴雨", timer: d };
+        spawnWaterCells(currentStage().water_cells || RAIN_WATER_CELL_COUNT);
+    }
+    sfx.warning();
+}
+
+function triggerEvent() {
+    const available = currentStage().event_kinds.filter(k => k in EVENT_DURATIONS_SECONDS);
+    if (!available.length) return;
+    const bias = game.scenario.event_bias || "rain";
+    let kind;
+    if (available.includes(bias) && Math.random() < 0.45) kind = bias;
+    else kind = choice(available);
+    startEvent(kind);
+}
+
+function finishEvent() {
+    if (!game.event) return;
+    const kind = game.event.kind;
+    if (kind === "communication") {
+        game.showHud = true;
+        game.message = "通讯恢复";
+        game.messageTimer = 1.1;
+    } else if (kind === "rain") {
+        game.water = [];
+    } else if (kind === "earthquake") {
+        game.message = "余震警报结束";
+    }
+    game.event = null;
+}
+
+function useSkill() {
+    if (game.state !== STATE.PLAYING) return;
+    if (game.skillCooldown > 0) {
+        game.message = `技能冷却：${Math.round(game.skillCooldown * 10) / 10}s`;
+        game.messageTimer = 1.0;
+        return;
+    }
+    game.skillCooldown = SKILL_COOLDOWN_SECONDS;
+    game.skillTimer = SKILL_DURATION_SECONDS;
+    if (game.tutorialMode && !game.tutorialEHintShown) {
+        game.tutorialEHintShown = true;
+        game.message = "风险扫描可以帮助寻找安全路线";
+    } else {
+        game.message = "[E] 风险扫描 ACTIVE";
+    }
+    game.messageTimer = 3.0;
+    sfx.skill();
+}
+
+function finishGame(reason) {
+    game.state = STATE.GAME_OVER;
+    game.message = reason;
+    game.gameOverMessage = choice(GAME_OVER_MESSAGES);
+    if (game.score < 21) game.gameOverRank = "应急萌新";
+    else if (game.score < 51) game.gameOverRank = "现场响应员";
+    else if (game.score < 101) game.gameOverRank = "救援先锋";
+    else game.gameOverRank = "应急指挥官";
+    saveRecord();
+    sfx.gameover();
+}
+
+function saveRecord() {
+    const data = loadSave();
+    if (game.score > data.best_score) data.best_score = game.score;
+    if (game.rescued > data.best_rescued) data.best_rescued = game.rescued;
+    if (game.tutorialCompleted) data.tutorial_completed = true;
+    writeSave(data);
+    game.saveData = data;
+}
+
+function update(dt) {
+    if (game.state !== STATE.PLAYING) return;
+    updateStage();
+    updateTutorialHints();
+
+    if (game.radioTimer > 0) {
+        game.radioTimer -= dt;
+        if (game.radioTimer <= 0) {
+            game.radioAlive = false;
+            game.radioMessage = "";
+        }
+    } else {
+        game.radioCooldown -= dt;
+        if (game.radioCooldown <= 0) {
+            triggerRadioMessage();
+            game.radioCooldown = randInt(...RADIO_COOLDOWN_RANGE);
+        }
+    }
+
+    if (game.skillCooldown > 0) game.skillCooldown = Math.max(0, game.skillCooldown - dt);
+    if (game.skillTimer > 0) {
+        game.skillTimer -= dt;
+        if (game.skillTimer <= 0) game.skillTimer = 0;
+    }
+    if (game.eagleSupportTimer > 0) game.eagleSupportTimer = Math.max(0, game.eagleSupportTimer - dt);
+    if (game.streakBonusTimer > 0) game.streakBonusTimer = Math.max(0, game.streakBonusTimer - dt);
+
+    if (game.messageTimer > 0) {
+        game.messageTimer -= dt;
+        if (game.messageTimer <= 0) game.message = "应急行动待命";
+    }
+
+    updateRisk();
+    const stage = currentStage();
+    game.moveInterval = Math.max(
+        MIN_MOVE_INTERVAL_MS,
+        stage.move_interval
+        - (game.riskLevel - 1) * 18
+        - Math.floor(game.score / 5) * 4
+        - pendingLoadCount() * LOAD_SPEED_PENALTY_MS
+    );
+    growObstacles(dt);
+    updateSafeZoneRelocation(dt);
+
+    game.visualElapsedMs += dt * 1000;
+    game.moveTimer += dt * 1000;
+    while (game.moveTimer >= game.moveInterval && game.state === STATE.PLAYING) {
+        game.moveTimer -= game.moveInterval;
+        if (moveTeam()) game.visualElapsedMs = game.moveTimer;
+    }
+
+    if (eventsAllowed()) game.eventCooldown -= dt;
+    if (game.eventCooldown <= 0 && game.event === null && eventsAllowed()) {
+        triggerEvent();
+        resetEventCooldown();
+    }
+
+    if (game.event) {
+        game.event.timer -= dt;
+        if (game.event.timer <= 0) finishEvent();
+    }
+}
+</script>
+<script>
+"use strict";
+/* ================== 绘制 ================== */
+
+function rr(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+}
+
+function drawPaperBackground() {
+    if (paperTexture) {
+        ctx.drawImage(paperTexture, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+        ctx.fillStyle = "rgba(238,236,219,0.55)";
+        ctx.fillRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+    } else {
+        ctx.fillStyle = rgb(COLORS.paper);
+        ctx.fillRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+    }
+}
+
+function drawPaperCard(x, y, w, h, fill, outline, radius) {
+    fill = fill || COLORS.paper_warm;
+    outline = outline || COLORS.pencil;
+    radius = Math.min(radius || 7, 12);
+    ctx.save();
+    ctx.fillStyle = rgb(COLORS.paper_shadow, 0.11);
+    rr(x + 2, y + 3, w, h, radius); ctx.fill();
+    ctx.fillStyle = rgb(fill, 0.94);
+    rr(x, y, w, h, radius); ctx.fill();
+    ctx.strokeStyle = rgb(outline, 0.9);
+    ctx.lineWidth = 1;
+    rr(x, y, w, h, radius); ctx.stroke();
+    ctx.restore();
+}
+
+function text(str, x, y, size, color, bold, align) {
+    ctx.font = font(size, bold);
+    ctx.fillStyle = rgb(color);
+    ctx.textAlign = align || "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(str, x, y);
+    ctx.textAlign = "left";
+}
+
+function textCenter(str, cx, cy, size, color, bold) {
+    ctx.font = font(size, bold);
+    ctx.fillStyle = rgb(color);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(str, cx, cy);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+}
+
+// 手绘标签按钮（对应 entry_art.draw_tag）
+function drawTag(rect, label, fill, size, textColor) {
+    const [rx, ry, rw, rh] = rect;
+    const hover = mousePos && mousePos[0] >= rx && mousePos[0] <= rx + rw &&
+                  mousePos[1] >= ry && mousePos[1] <= ry + rh;
+    const f = hover ? fill.map(c => Math.min(255, c + 12)) : fill;
+    const y = ry - (hover ? 2 : 0);
+    const pts = [[rx, y + 12], [rx + 18, y + 1], [rx + rw - 5, y + 3],
+                 [rx + rw, y + rh - 8], [rx + rw - 16, y + rh], [rx + 7, y + rh - 3]];
+    ctx.save();
+    ctx.beginPath();
+    pts.forEach((p, i) => i ? ctx.lineTo(p[0] + 2, p[1] + 3) : ctx.moveTo(p[0] + 2, p[1] + 3));
+    ctx.closePath();
+    ctx.fillStyle = "rgb(172,169,149)";
+    ctx.fill();
+    ctx.beginPath();
+    pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+    ctx.closePath();
+    ctx.fillStyle = rgb(f);
+    ctx.fill();
+    ctx.strokeStyle = "rgb(89,91,75)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(rx + 30, y + 7); ctx.lineTo(rx + rw - 15, y + 8);
+    ctx.strokeStyle = "rgb(248,242,220)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(rx + 19, y + rh / 2, 4, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgb(65,64,55)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+    textCenter(label, rx + rw / 2 + 8, y + rh / 2, size || FONT.body, textColor || [65, 64, 55]);
+}
+
+// 贴纸按钮（gameover）
+function drawStickerButton(rect, label, fill, textColor) {
+    const [rx, ry, rw, rh] = rect;
+    const hover = mousePos && mousePos[0] >= rx && mousePos[0] <= rx + rw &&
+                  mousePos[1] >= ry && mousePos[1] <= ry + rh;
+    const oy = hover ? -2 : 0;
+    textColor = textColor || COLORS.paper_warm;
+    ctx.save();
+    ctx.fillStyle = "rgb(176,153,118)";
+    rr(rx + 3, ry + 5, rw, rh, 7); ctx.fill();
+    ctx.fillStyle = rgb(fill);
+    rr(rx, ry + oy, rw, rh, 7); ctx.fill();
+    ctx.strokeStyle = rgb(COLORS.ink);
+    ctx.lineWidth = 2;
+    rr(rx, ry + oy, rw, rh, 7); ctx.stroke();
+    if (hover) {
+        ctx.strokeStyle = "rgb(255,246,180)";
+        ctx.lineWidth = 2;
+        rr(rx - 4, ry + oy - 4, rw + 8, rh + 8, 10); ctx.stroke();
+    }
+    ctx.restore();
+    textCenter(label, rx + rw / 2, ry + oy + rh / 2, FONT.body, textColor);
+}
+
+// 纸张卡片面板（对应 draw_sheet）
+function drawSheet(x, y, w, h) {
+    ctx.save();
+    ctx.beginPath();
+    const shadow = [[x - 13, y + 18], [x + w + 8, y - 9], [x + w + 19, y + h + 15], [x - 1, y + h + 20]];
+    shadow.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+    ctx.closePath();
+    ctx.fillStyle = "rgb(116,125,94)";
+    ctx.fill();
+    ctx.beginPath();
+    const corners = [[x, y + 4], [x + w - 6, y], [x + w, y + h - 5], [x + 4, y + h]];
+    corners.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+    ctx.closePath();
+    ctx.fillStyle = "rgb(248,239,205)";
+    ctx.fill();
+    ctx.strokeStyle = "rgb(65,64,55)";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.strokeStyle = "rgb(230,221,191)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 8; i++) {
+        const ly = y + 62 + i * 47;
+        if (ly < y + h - 18) {
+            ctx.beginPath(); ctx.moveTo(x + 25, ly); ctx.lineTo(x + w - 25, ly); ctx.stroke();
+        }
+    }
+    ctx.fillStyle = "rgb(194,195,158)";
+    rr(x + w / 2 - 45, y - 15, 90, 25, 5); ctx.fill();
+    ctx.strokeStyle = "rgb(65,64,55)";
+    ctx.lineWidth = 2;
+    rr(x + w / 2 - 45, y - 15, 90, 25, 5); ctx.stroke();
+    ctx.restore();
+}
+
+// ---------- 精灵绘制 ----------
+const DIR_ANGLE = { "1,0": 0, "0,-1": -Math.PI / 2, "-1,0": Math.PI, "0,1": Math.PI / 2 };
+
+function drawGroundShadow(cx, cy, size) {
+    ctx.save();
+    ctx.fillStyle = "rgba(54,57,45,0.25)";
+    ctx.beginPath();
+    ctx.ellipse(cx - size / 2 + Math.round(size * 0.18) + 3 + Math.round(size * 0.34),
+                cy - size / 2 + Math.round(size * 0.74) + 5,
+                Math.round(size * 0.34), 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+}
+
+function drawSprite(kind, cx, cy, size, direction) {
+    const img = SPRITES[kind];
+    drawGroundShadow(cx, cy, size);
+    ctx.save();
+    if (img) {
+        if (direction) {
+            ctx.translate(cx, cy);
+            ctx.rotate(DIR_ANGLE[direction.join(",")] || 0);
+            ctx.drawImage(img, -size / 2, -size / 2, size, size);
+        } else {
+            ctx.drawImage(img, cx - size / 2, cy - size / 2, size, size);
+        }
+    } else {
+        // 兜底色块
+        const fallback = { rescue: COLORS.vehicle, cargo: COLORS.supply_box, transport: COLORS.supply_box,
+            logistics: COLORS.supply_box, person: [189, 109, 77], tent: COLORS.tent,
+            supply: COLORS.supply_box, medical: COLORS.medical, battery: [106, 165, 173],
+            eagle: COLORS.eagle, rubble: COLORS.rubble };
+        ctx.fillStyle = rgb(fallback[kind] || COLORS.ink);
+        ctx.beginPath();
+        ctx.arc(cx, cy, size / 2.4, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+function cellCenter(x, y) {
+    return [BOARD_X + x * CELL_SIZE + Math.floor(CELL_SIZE / 2),
+            BOARD_Y + y * CELL_SIZE + Math.floor(CELL_SIZE / 2)];
+}
+
+// ---------- 菜单 / 简报 / 说明 ----------
+const menuButtons = { start: [760, 468, 250, 54], tutorial: [777, 535, 233, 54], quit: [794, 602, 216, 50] };
+const gameoverButtons = { again: [360, 610, 160, 50], menu: [590, 610, 160, 50] };
+const briefButton = [650, 548, 170, 54];
+const entryBackButton = [260, 107, 110, 40];
+const guideButtons = { back: [140, 640, 190, 54], learn: [740, 640, 220, 54] };
+
+function drawEntryScene() {
+    if (IMG.cover) {
+        ctx.drawImage(IMG.cover, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+    } else {
+        ctx.fillStyle = "rgb(231,235,218)";
+        ctx.fillRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+    }
+}
+
+function drawShade() {
+    ctx.fillStyle = "rgba(57,73,61,0.19)";
+    ctx.fillRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+}
+
+function drawMenu() {
+    drawEntryScene();
+    text("救援基地 / 出发前简报", 97, 83, FONT.small, COLORS.pencil);
+    text("EMERGENCY RUN", 93, 117, FONT.title, COLORS.ink, true);
+    text("应急行动", 96, 166, FONT.title, COLORS.ink, true);
+    text("今天，也要把大家平安带回来。", 97, 231, FONT.body, COLORS.ink);
+    drawTag(menuButtons.start, "开始行动", [190, 203, 166], FONT.body);
+    drawTag(menuButtons.tutorial, "游戏说明", [226, 222, 202], FONT.body);
+    drawTag(menuButtons.quit, "退出", [226, 222, 202], FONT.body);
+    if (game.quitHintTimer > 0) {
+        text("网页版无需退出，直接关闭页面即可", 760, 665, FONT.small, COLORS.pencil);
+    }
+}
+
+function drawMissionBrief() {
+    drawEntryScene();
+    drawShade();
+    drawSheet(230, 88, 640, 544);
+    drawTag(entryBackButton, "返回", [224, 225, 189], FONT.small);
+    text("本次行动", 280, 166, FONT.title, COLORS.ink, true);
+    text(game.scenario.title, 281, 220, FONT.body, COLORS.tent_dark);
+    text(game.scenario.intro, 281, 252, FONT.small, COLORS.pencil);
+    text("目标", 281, 277 + 20, FONT.small, COLORS.pencil);
+    text("搜救群众 → 安全转移 → 应对现场风险", 281, 306 + 20, FONT.body, COLORS.ink);
+    drawSprite("person", 343, 393 + 12, 86);
+    drawSprite("transport", 518, 393 + 12, 105);
+    drawSprite("tent", 719, 393 + 12, 120);
+    const controls = [["WASD / 方向键", "移动"], ["E", "风险扫描"], ["SPACE", "暂停"]];
+    controls.forEach(([key, label], i) => {
+        const x = 281 + i * 180;
+        text(key, x, 478, FONT.small, COLORS.tent_dark);
+        text(label, x, 506, FONT.small, COLORS.ink);
+    });
+    drawTag(briefButton, "出发", [163, 211, 135], FONT.body);
+}
+
+const LEGEND = [
+    ["supply", "应急物资", "纸箱与胶带", "送到安置点结算"],
+    ["medical", "医疗包", "米白包体、红十字", "获得后短时扫描"],
+    ["battery", "通讯电池", "蓝灰箱体、闪电", "获得后清除一处障碍"],
+    ["eagle", "求是鹰支援", "金黄箱体、鹰标", "限时清障与护航"],
+    ["rubble", "危险障碍", "碎石、倒木、路障", "避开，不要碰撞"],
+    ["water", "危险积水", "蓝灰水面与波纹", "避开积水区域"],
+];
+
+function drawGuide() {
+    drawEntryScene();
+    drawShade();
+    drawSheet(100, 65, 900, 545);
+    text("救援行动 · 四步出发", 140, 94, FONT.title, COLORS.ink, true);
+    const steps = [
+        ["person", 86, "① 找到受困群众", "寻找举手求助的人"],
+        ["transport", 105, "② 接触后进入转运", "群众上车，车队变长"],
+        ["tent", 120, "③ 前往绿色安置点", "抵达帐篷，完成转移"],
+        ["rubble", 90, "④ 风险升高时", "及时撤离，安全优先"],
+    ];
+    steps.forEach(([kind, size, title, note], i) => {
+        const x = 213 + i * 224;
+        drawSprite(kind, x, 210, size);
+        textCenter(title, x, 279, FONT.small, COLORS.ink);
+        textCenter(note, x, 307, FONT.small, COLORS.pencil);
+    });
+    ctx.strokeStyle = rgb(COLORS.pencil);
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(140, 340); ctx.lineTo(960, 340); ctx.stroke();
+    text("地图图例", 140, 357, FONT.body, COLORS.ink);
+    LEGEND.forEach(([kind, name, appearance, effect], i) => {
+        const x = 185 + i * 145;
+        if (kind === "water") drawWaterIcon(x, 438, 76);
+        else drawSprite(kind, x, 438, 76);
+        textCenter(name, x, 491, FONT.small, COLORS.ink);
+        textCenter(appearance, x, 521, FONT.mini, COLORS.pencil);
+        textCenter(effect, x, 546, FONT.mini, COLORS.pencil);
+    });
+    drawTag(guideButtons.back, "返回基地", [224, 225, 189], FONT.body);
+    const learn = game.tutorialCompleted ? "再次学习玩法" : "学习并出发";
+    drawTag(guideButtons.learn, learn, [163, 211, 135], FONT.body);
+}
+
+function drawWaterIcon(cx, cy, size) {
+    const s = size / 2;
+    ctx.save();
+    ctx.fillStyle = rgb(COLORS.water, 0.76);
+    rr(cx - s, cy - s, size, size, 8); ctx.fill();
+    ctx.strokeStyle = "rgba(62,118,139,0.9)";
+    ctx.lineWidth = 2;
+    rr(cx - s, cy - s, size, size, 8); ctx.stroke();
+    ctx.strokeStyle = "rgba(222,239,224,0.85)";
+    for (const off of [-10, 6]) {
+        ctx.beginPath();
+        for (let i = -s + 6; i < s - 6; i++) {
+            const yy = cy + off + Math.round(2 * Math.sin(i / 5));
+            i === -s + 6 ? ctx.moveTo(cx + i, yy) : ctx.lineTo(cx + i, yy);
+        }
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+// ---------- 主游戏画面 ----------
+function drawGame() {
+    drawPaperBackground();
+
+    // 地图卡片
+    drawPaperCard(BOARD_X, BOARD_Y, BOARD_SIZE, BOARD_SIZE, COLORS.paper_green, COLORS.pencil, 20);
+
+    // 场景底图
+    const themeBgs = BACKGROUNDS[game.scenario.background_theme];
+    if (themeBgs && themeBgs[game.backgroundVariantIndex]) {
+        ctx.drawImage(themeBgs[game.backgroundVariantIndex], BOARD_X, BOARD_Y);
+    } else {
+        ctx.fillStyle = "rgb(231,235,218)";
+        ctx.fillRect(BOARD_X, BOARD_Y, BOARD_SIZE, BOARD_SIZE);
+    }
+
+    drawRoute();
+    drawWater();
+    drawObstacles();
+    if (safeZonesVisible()) drawSafeZones();
+    drawResources();
+    drawSurvivors();
+    drawTeam();
+    drawTutorialGuidance();
+
+    if (game.event) drawEventText();
+
+    // 无线电
+    if (game.radioAlive && game.radioMessage) {
+        const alpha = Math.max(60, Math.min(255, Math.floor(255 * (game.radioTimer / RADIO_DURATION_SECONDS)))) / 255;
+        const rx = BOARD_X + 150, ry = BOARD_Y + 34, rw = 395, rh = 38;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = rgb(COLORS.paper_warm);
+        rr(rx, ry, rw, rh, 12); ctx.fill();
+        ctx.strokeStyle = rgb(COLORS.river_dark);
+        ctx.lineWidth = 2;
+        rr(rx, ry, rw, rh, 12); ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(rx + 21, ry + 19, 8, 0, Math.PI * 2);
+        ctx.strokeStyle = rgb(COLORS.eagle);
+        ctx.stroke();
+        text("现场无线电：" + game.radioMessage, rx + 38, ry + 9, FONT.small, COLORS.ink);
+        ctx.restore();
+    }
+    drawStreakBonus();
+
+    drawHud();
+
+    if (!game.showHud) {
+        ctx.fillStyle = "rgba(70,63,52,0.57)";
+        ctx.fillRect(HUD_X - 4, 118, 295, 420);
+        drawPaperCard(HUD_X + 35, 245, 205, 80, COLORS.paper_warm, COLORS.danger, 16);
+        ctx.strokeStyle = rgb(COLORS.danger);
+        ctx.lineWidth = 2;
+        rr(HUD_X + 35, 245, 205, 80, 16); ctx.stroke();
+        textCenter("通讯中断", HUD_X + 35 + 102, 245 + 40, FONT.body, COLORS.danger);
+    }
+
+    if (game.messageTimer > 0) {
+        const color = (game.message.startsWith("⚠") || game.message.startsWith("道路")) ? COLORS.danger : COLORS.tent_dark;
+        text(game.message, BOARD_X + 12, 40, FONT.body, color);
+    }
+}
+
+function safeZonesVisible() {
+    return game.showHud || game.skillTimer > 0;
+}
+
+function drawRoute() {
+    if (game.route.length < 2) return;
+    const maxPoints = 8;
+    const step = Math.max(1, Math.floor(game.route.length / maxPoints));
+    const sample = [];
+    for (let i = 0; i < game.route.length; i += step) sample.push(game.route[i]);
+    ctx.fillStyle = "rgb(116,180,205)";
+    for (const [x, y] of sample.slice(-maxPoints)) {
+        const [px, py] = cellCenter(x, y);
+        ctx.beginPath();
+        ctx.arc(px, py, 3, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+function drawWater() {
+    if (!game.water.length) return;
+    const occ = new Set(game.water.map(c => c[0] + "," + c[1]));
+    for (const [x, y] of game.water) {
+        const px = BOARD_X + x * CELL_SIZE, py = BOARD_Y + y * CELL_SIZE;
+        ctx.fillStyle = rgb(COLORS.water, 0.76);
+        rr(px, py, CELL_SIZE, CELL_SIZE, 7); ctx.fill();
+        if (occ.has((x + 1) + "," + y)) ctx.fillRect(px + CELL_SIZE - 7, py + 4, 14, CELL_SIZE - 8);
+        if (occ.has(x + "," + (y + 1))) ctx.fillRect(px + 4, py + CELL_SIZE - 7, CELL_SIZE - 8, 14);
+        // 边缘波纹
+        ctx.strokeStyle = "rgba(62,118,139,0.9)";
+        ctx.lineWidth = 2;
+        const edges = [[0, -1, px, py], [0, 1, px, py + CELL_SIZE - 1], [-1, 0, px, py], [1, 0, px + CELL_SIZE - 1, py]];
+        for (const [dx, dy, ax, ay] of edges) {
+            if (occ.has((x + dx) + "," + (y + dy))) continue;
+            const horizontal = dy !== 0;
+            ctx.beginPath();
+            for (let i = 0; i <= CELL_SIZE; i++) {
+                const ripple = Math.round(1.5 * Math.sin(((horizontal ? px : py) + i) / 5));
+                const ex = horizontal ? ax + i : ax + ripple;
+                const ey = horizontal ? ay + ripple : ay + i;
+                i === 0 ? ctx.moveTo(ex, ey) : ctx.lineTo(ex, ey);
+            }
+            ctx.stroke();
+        }
+        ctx.strokeStyle = "rgba(222,239,224,0.82)";
+        for (const off of [9, 22]) {
+            ctx.beginPath();
+            for (let i = 4; i < CELL_SIZE - 3; i++) {
+                const yy = py + off + Math.round(2 * Math.sin((px + i) / 7));
+                i === 4 ? ctx.moveTo(px + i, yy) : ctx.lineTo(px + i, yy);
+            }
+            ctx.stroke();
+        }
+    }
+}
+
+function drawObstacles() {
+    for (const [x, y] of game.obstacles) {
+        const [cx, cy] = cellCenter(x, y);
+        drawSprite("rubble", cx, cy, SPRITE_SIZE.rubble);
+    }
+}
+
+function drawSafeZones() {
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 350);
+    for (const zone of game.safeZones) {
+        const [cx, cy] = cellCenter(zone.x, zone.y);
+        ctx.save();
+        ctx.fillStyle = `rgba(117,170,111,${(44 + pulse * 20) / 255})`;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 27 + pulse * 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(92,176,107,0.35)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 28 + pulse * 4, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+        drawSprite("tent", cx, cy, SPRITE_SIZE.tent);
+    }
+}
+
+function drawResources() {
+    const bob = Math.round(Math.sin(performance.now() / 260) * 2);
+    for (const r of game.resources) {
+        const [cx, cy] = cellCenter(r.x, r.y);
+        drawSprite(r.kind, cx, cy + bob, SPRITE_SIZE.resource);
+    }
+}
+
+function drawSurvivors() {
+    for (const s of game.survivors) {
+        if (s.carried) continue;
+        const [cx, cy] = cellCenter(s.x, s.y);
+        drawSprite("person", cx, cy, SPRITE_SIZE.person);
+    }
+}
+
+function drawTeam() {
+    const positions = renderVehiclePositions();
+    positions.forEach(([rx, ry], i) => {
+        if (i >= game.team.length) return;
+        const [x, y] = game.team[i];
+        const cx = Math.round(BOARD_X + rx * CELL_SIZE + CELL_SIZE / 2);
+        const cy = Math.round(BOARD_Y + ry * CELL_SIZE + CELL_SIZE / 2);
+        if (i === 0) {
+            if (game.eagleSupportTimer > 0) {
+                ctx.save();
+                ctx.strokeStyle = rgb(COLORS.eagle);
+                ctx.lineWidth = 2;
+                ctx.beginPath(); ctx.arc(cx, cy, 24, 0, Math.PI * 2); ctx.stroke();
+                ctx.strokeStyle = rgb(COLORS.eagle_dark);
+                ctx.beginPath(); ctx.arc(cx - 16, cy - 4, 12, Math.PI + 0.1, Math.PI + 2.6); ctx.stroke();
+                ctx.beginPath(); ctx.arc(cx + 16, cy - 4, 12, Math.PI + 0.5, Math.PI + 3.0); ctx.stroke();
+                ctx.restore();
+            }
+            drawSprite("rescue", cx, cy, SPRITE_SIZE.rescue, game.direction);
+        } else {
+            const ahead = game.team[i - 1];
+            let heading = [ahead[0] - x, ahead[1] - y];
+            const valid = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(h => h[0] === heading[0] && h[1] === heading[1]);
+            if (!valid) heading = game.direction;
+            const kind = ["cargo", "transport", "logistics"][(i - 1) % 3];
+            drawSprite(kind, cx, cy, SPRITE_SIZE.body, heading);
+        }
+    });
+
+    // 风险扫描高亮
+    if (game.skillTimer > 0) {
+        ctx.save();
+        ctx.lineWidth = 2;
+        for (const z of game.safeZones) {
+            ctx.strokeStyle = "rgb(255,234,161)";
+            rr(BOARD_X + z.x * CELL_SIZE, BOARD_Y + z.y * CELL_SIZE, CELL_SIZE, CELL_SIZE, 4);
+            ctx.stroke();
+        }
+        for (const [x, y] of game.obstacles) {
+            ctx.strokeStyle = "rgb(247,129,113)";
+            rr(BOARD_X + x * CELL_SIZE, BOARD_Y + y * CELL_SIZE, CELL_SIZE, CELL_SIZE, 4);
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+}
+
+function drawTutorialGuidance() {
+    if (!safeZonesVisible()) return;
+    if (!game.tutorialMode || elapsedSeconds() >= TUTORIAL_TOTAL_SECONDS) return;
+    let target = null, label = "";
+    if (!game.tutorialPickedSurvivor) {
+        const s = survivorAt(TUTORIAL_SURVIVOR_POS[0], TUTORIAL_SURVIVOR_POS[1]);
+        if (s) { target = [s.x, s.y]; label = "先前往这里，接触受困群众"; }
+    } else if (game.onboardSurvivors.length) {
+        const zone = nearestSafeZone();
+        if (zone) { target = [zone.x, zone.y]; label = "群众已上车 → 请前往绿色安置点"; }
+    }
+    if (!target) return;
+    const [tx, ty] = cellCenter(target[0], target[1]);
+    const [hx, hy] = cellCenter(game.team[0][0], game.team[0][1]);
+    ctx.save();
+    ctx.strokeStyle = "rgb(255,234,161)";
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(tx, ty, CELL_SIZE, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = rgb(COLORS.danger);
+    ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(tx, ty); ctx.stroke();
+    ctx.fillStyle = rgb(COLORS.danger);
+    ctx.beginPath();
+    ctx.moveTo(tx, ty); ctx.lineTo(tx - 8, ty - 5); ctx.lineTo(tx - 5, ty + 8);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+    text(label, BOARD_X + 12, BOARD_Y + BOARD_SIZE - 34, FONT.small, COLORS.danger);
+}
+
+function drawEventText() {
+    if (!game.event) return;
+    ctx.font = font(FONT.body);
+    const w = Math.max(165, ctx.measureText(game.event.text).width + 26);
+    drawPaperCard(BOARD_X + 245, 32, w, 40, COLORS.paper_warm, COLORS.danger, 14);
+    text(game.event.text, BOARD_X + 245 + 13, 32 + 7, FONT.body, COLORS.danger);
+}
+
+function drawStreakBonus() {
+    if (game.streakBonusTimer <= 0) return;
+    const pulse = 0.5 + 0.5 * Math.abs((performance.now() % 800) / 400 - 1);
+    const alpha = (110 + pulse * 95) / 255;
+    const label = "黄金72小时：救援效率提升";
+    ctx.font = font(FONT.body);
+    const bw = ctx.measureText(label).width + 36;
+    const bx = BOARD_X + (BOARD_SIZE - bw) / 2, by = BOARD_Y + BOARD_SIZE - 56;
+    ctx.save();
+    ctx.fillStyle = rgb(COLORS.eagle, alpha);
+    rr(bx, by, bw, 36, 12); ctx.fill();
+    text(label, bx + 18, by + 5, FONT.body, COLORS.tent_dark);
+    ctx.restore();
+}
+
+function drawHud() {
+    drawPaperCard(HUD_X, 82, 300, 70, COLORS.paper_warm, COLORS.pencil, 16);
+    text("EMERGENCY RUN", HUD_X + 22, 98, FONT.body, COLORS.ink);
+    text("救援行动地图", HUD_X + 23, 128, FONT.mini, COLORS.pencil);
+
+    drawHudLine("响应得分", String(game.score), 170, COLORS.paper_warm);
+    drawHudLine("成功转移", String(game.rescued), 230, COLORS.paper_green);
+    drawHudLine("风险等级", game.riskText, 290, COLORS.paper_blue);
+    const eventNames = { earthquake: "余震", rain: "暴雨", communication: "通讯中断" };
+    drawHudLine("灾害事件", game.event ? eventNames[game.event.kind] : "无", 350, COLORS.paper_warm);
+    drawHudLine("待结算", pendingLoadText(), 410, COLORS.paper_green);
+
+    drawPaperCard(HUD_X + 10, 475, 280, 56, COLORS.paper_blue, COLORS.river_dark, 15);
+    let skillText, skillColor;
+    if (game.skillCooldown > 0) {
+        skillText = `[E] 风险扫描 ${Math.round(game.skillCooldown * 10) / 10}s`;
+        skillColor = COLORS.danger;
+    } else {
+        skillText = "[E] 风险扫描 READY";
+        skillColor = COLORS.tent_dark;
+    }
+    text(skillText, HUD_X + 10 + 22, 475 + 18, FONT.small, skillColor);
+
+    drawPaperCard(HUD_X + 28, 548, 245, 88, COLORS.paper_warm, COLORS.pencil, 7);
+    const ops = ["WASD / ARROWS 移动", "SPACE 暂停", "E 扫描", "R 重启", "ESC 返回菜单"];
+    let y = 548 + 8;
+    for (const s of ops) {
+        text(s, HUD_X + 28 + 14, y, FONT.mini, COLORS.pencil);
+        y += 16;
+    }
+    // 最高分
+    text(`最高 ${game.saveData.best_score} 分 / 救援 ${game.saveData.best_rescued} 人`,
+        HUD_X + 28, 645, FONT.mini, COLORS.pencil);
+}
+
+function drawHudLine(label, value, y, fill) {
+    drawPaperCard(HUD_X + 10, y, 280, 46, fill, COLORS.pencil, 13);
+    text(label, HUD_X + 10 + 15, y + 8, FONT.mini, COLORS.pencil);
+    const color = (label === "风险等级" && game.riskLevel >= 3) ? COLORS.danger : COLORS.ink;
+    text(value, HUD_X + 10 + 132, y + 6, FONT.body, color);
+}
+
+function drawPauseOverlay() {
+    ctx.fillStyle = "rgba(76,65,45,0.33)";
+    ctx.fillRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+    drawPaperCard(385, 245, 330, 160, COLORS.paper_warm, COLORS.pencil, 18);
+    textCenter("暂停", 385 + 165, 245 + 58, FONT.title, COLORS.ink, true);
+    textCenter("按 SPACE 继续行动", 385 + 165, 245 + 105, FONT.small, COLORS.pencil);
+}
+
+function drawGameOver() {
+    drawPaperBackground();
+    drawPaperCard(150, 100, 760, 500, COLORS.paper_warm, COLORS.pencil, 22);
+    text("本次行动报告卡", 290, 130, FONT.title, COLORS.ink, true);
+    drawSprite("rescue", 235, 150, SPRITE_SIZE.rescue, [1, 0]);
+    drawSprite("tent", 815, 158, SPRITE_SIZE.tent);
+
+    const items = [
+        ["响应得分", String(game.score)],
+        ["成功救援人数", String(game.rescued)],
+        ["持续时间", `${elapsedSeconds()}s`],
+        ["最高风险等级", game.riskText],
+        ["交付物资价值", String(game.resourcesCollected)],
+    ];
+    let y = 190;
+    for (const [label, value] of items) {
+        ctx.fillStyle = "rgb(249,241,219)";
+        rr(235, y - 6, 520, 34, 9); ctx.fill();
+        ctx.strokeStyle = "rgb(229,214,178)";
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(247, y + 25); ctx.lineTo(743, y + 25); ctx.stroke();
+        text(label, 250, y, FONT.body, COLORS.ink);
+        text(value, 560, y, FONT.body, COLORS.tent_dark);
+        y += 42;
+    }
+
+    ctx.fillStyle = rgb(COLORS.paper_green);
+    rr(240, 420, 470, 42, 12); ctx.fill();
+    ctx.strokeStyle = rgb(COLORS.tent_dark);
+    ctx.lineWidth = 2;
+    rr(240, 420, 470, 42, 12); ctx.stroke();
+    text(`称号：${game.gameOverRank}`, 260, 427, FONT.body, COLORS.tent_dark);
+
+    text(game.gameOverMessage, 250, 482, FONT.small, COLORS.pencil);
+    text(`历史最高：${game.saveData.best_score} 分 / 最多救援 ${game.saveData.best_rescued} 人`,
+        250, 510, FONT.mini, COLORS.pencil);
+
+    drawStickerButton(gameoverButtons.again, "再次行动", COLORS.tent);
+    drawStickerButton(gameoverButtons.menu, "返回主页", COLORS.river, COLORS.ink);
+}
+
+function drawAttribution() {
+    ctx.save();
+    ctx.font = font(12);
+    ctx.fillStyle = "rgba(66,70,56,0.55)";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "bottom";
+    ctx.fillText("by 吴桐雨", WINDOW_WIDTH - 10, WINDOW_HEIGHT - 6);
+    ctx.restore();
+}
+
+function draw() {
+    ctx.clearRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+    const shaking = (game.state === STATE.PLAYING || game.state === STATE.PAUSED) &&
+                    game.event && game.event.kind === "earthquake";
+    ctx.save();
+    if (shaking) {
+        ctx.translate(randInt(-EARTHQUAKE_SHAKE_PIXELS, EARTHQUAKE_SHAKE_PIXELS),
+                      randInt(-EARTHQUAKE_SHAKE_PIXELS, EARTHQUAKE_SHAKE_PIXELS));
+    }
+    switch (game.state) {
+        case STATE.MENU: drawMenu(); break;
+        case STATE.MISSION_BRIEF: drawMissionBrief(); break;
+        case STATE.GUIDE: drawGuide(); break;
+        case STATE.PAUSED: drawGame(); drawPauseOverlay(); break;
+        case STATE.GAME_OVER: drawGameOver(); break;
+        default: drawGame(); break;
+    }
+    ctx.restore();
+    drawAttribution();
+}
+</script>
+<script>
+"use strict";
+/* ================== 输入与主循环 ================== */
+
+let mousePos = null;
+
+function inRect(rect, x, y) {
+    return x >= rect[0] && x <= rect[0] + rect[2] && y >= rect[1] && y <= rect[1] + rect[3];
+}
+
+function canvasPos(e) {
+    const r = canvas.getBoundingClientRect();
+    return [(e.clientX - r.left) * (WINDOW_WIDTH / r.width),
+            (e.clientY - r.top) * (WINDOW_HEIGHT / r.height)];
+}
+
+canvas.addEventListener("mousemove", (e) => { mousePos = canvasPos(e); });
+canvas.addEventListener("mouseleave", () => { mousePos = null; });
+
+canvas.addEventListener("mousedown", (e) => {
+    ensureAudio();
+    canvas.focus();
+    const [x, y] = canvasPos(e);
+    handleClick(x, y);
+});
+
+function handleClick(x, y) {
+    if (game.state === STATE.MENU) {
+        for (const key of Object.keys(menuButtons)) {
+            if (inRect(menuButtons[key], x, y)) {
+                sfx.click();
+                if (key === "start") startFromMenu(false);
+                else if (key === "tutorial") game.state = STATE.GUIDE;
+                else if (key === "quit") game.quitHintTimer = 3.0;
+                return;
+            }
+        }
+    } else if (game.state === STATE.MISSION_BRIEF) {
+        if (inRect(briefButton, x, y)) {
+            sfx.click();
+            resetGame(game.forceTutorial || !game.tutorialCompleted, game.scenario);
+        } else if (inRect(entryBackButton, x, y)) {
+            sfx.click();
+            game.state = STATE.MENU;
+        }
+    } else if (game.state === STATE.GUIDE) {
+        if (inRect(guideButtons.back, x, y)) {
+            sfx.click();
+            game.state = STATE.MENU;
+        } else if (inRect(guideButtons.learn, x, y)) {
+            sfx.click();
+            startFromMenu(true);
+        }
+    } else if (game.state === STATE.GAME_OVER) {
+        if (inRect(gameoverButtons.again, x, y)) {
+            sfx.click();
+            resetGame(false);
+        } else if (inRect(gameoverButtons.menu, x, y)) {
+            sfx.click();
+            game.state = STATE.MENU;
+        }
+    }
+}
+
+window.addEventListener("keydown", (e) => {
+    const k = e.key;
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(k)) {
+        e.preventDefault();
+    }
+    ensureAudio();
+    switch (k) {
+        case "w": case "W": case "ArrowUp":    game.nextDirection = [0, -1]; break;
+        case "s": case "S": case "ArrowDown":  game.nextDirection = [0, 1];  break;
+        case "a": case "A": case "ArrowLeft":  game.nextDirection = [-1, 0]; break;
+        case "d": case "D": case "ArrowRight": game.nextDirection = [1, 0];  break;
+        case " ":
+            if (game.state === STATE.PLAYING) game.state = STATE.PAUSED;
+            else if (game.state === STATE.PAUSED) game.state = STATE.PLAYING;
+            break;
+        case "e": case "E": useSkill(); break;
+        case "r": case "R":
+            if (game.state === STATE.PLAYING || game.state === STATE.PAUSED || game.state === STATE.GAME_OVER) {
+                resetGame(false);
+            }
+            break;
+        case "Escape": game.state = STATE.MENU; break;
+        case "Enter":
+            if (game.state === STATE.MENU) startFromMenu(false);
+            else if (game.state === STATE.MISSION_BRIEF) resetGame(game.forceTutorial || !game.tutorialCompleted, game.scenario);
+            break;
+    }
+});
+
+let lastTs = null;
+function loop(ts) {
+    if (lastTs === null) lastTs = ts;
+    let dt = (ts - lastTs) / 1000;
+    lastTs = ts;
+    if (dt > 0.1) dt = 0.1;
+    if (assetsReady) {
+        update(dt);
+        if (game.quitHintTimer > 0) game.quitHintTimer -= dt;
+        draw();
+    } else {
+        ctx.fillStyle = rgb(COLORS.paper);
+        ctx.fillRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+        textCenter("资源加载中…", WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2, FONT.body, COLORS.ink);
+    }
+    requestAnimationFrame(loop);
+}
+
+loadAssets().then(() => {
+    canvas.focus();
+});
+requestAnimationFrame(loop);
+window.addEventListener("load", () => canvas.focus());
+</script>
+</body>
+</html>

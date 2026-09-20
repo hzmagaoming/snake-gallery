@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Snake — 终端贪吃蛇 · by 吴子谦</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #050805;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #wrap {
+    position: relative;
+    outline: none;
+  }
+  canvas {
+    display: block;
+    background: #0a0f0a;
+    image-rendering: auto;
+  }
+  /* 轻微 CRT 扫描线 */
+  #scanlines {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0) 0px,
+      rgba(0, 0, 0, 0) 2px,
+      rgba(0, 0, 0, 0.14) 3px,
+      rgba(0, 0, 0, 0.14) 4px
+    );
+    mix-blend-mode: multiply;
+  }
+  #vignette {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.45) 100%);
+  }
+</style>
+</head>
+<body>
+<div id="wrap" tabindex="0">
+  <canvas id="game"></canvas>
+  <div id="scanlines"></div>
+  <div id="vignette"></div>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  // ===== 逻辑分辨率（模拟原版终端字符网格，>= 原版最小 28x12）=====
+  var COLS = 60;            // 终端列数（含边框）
+  var ROWS = 26;            // 终端行数（含边框）
+  var CELL_W = 14;          // 单字符像素宽（等宽）
+  var CELL_H = 22;          // 单字符像素高
+  var TICK_MS = 100;        // 原版 TICK_SECONDS = 0.10
+
+  var W = COLS * CELL_W;
+  var H = ROWS * CELL_H;
+
+  var canvas = document.getElementById("game");
+  canvas.width = W;
+  canvas.height = H;
+  var ctx = canvas.getContext("2d");
+
+  // 终端磷光绿配色
+  var COLOR_BG = "#0a0f0a";
+  var COLOR_DIM = "#1d5c2a";    // 边框
+  var COLOR_TEXT = "#4dff7a";  // 标题/文字
+  var COLOR_HEAD = "#b6ffc9";  // 蛇头 ■
+  var COLOR_BODY = "#33d95f";  // 蛇身 □
+  var COLOR_FOOD = "#ffd75f";  // 食物 ●（终端琥珀点缀）
+  var COLOR_GHOST = "rgba(77, 255, 122, 0.06)";
+
+  var TITLE = " Snake  |  方向键 / WASD 移动  |  Q 退出 ";
+
+  // ===== 游戏状态 =====
+  var snake, direction, food, score;
+  var state = "playing"; // playing | over | quit
+  var pendingDir = null;
+  var lastTick = 0;
+  var acc = 0;
+
+  function reset() {
+    var cy = Math.floor(ROWS / 2);
+    var cx = Math.floor(COLS / 2);
+    snake = [
+      [cy, cx],
+      [cy, cx - 1],
+      [cy, cx - 2]
+    ];
+    direction = [0, 1];
+    pendingDir = null;
+    score = 0;
+    food = newFood();
+    state = "playing";
+    acc = 0;
+  }
+
+  // 与原版一致：在不与蛇重叠的内部格子里随机取食物
+  function newFood() {
+    var occupied = {};
+    for (var i = 0; i < snake.length; i++) occupied[snake[i][0] + "," + snake[i][1]] = true;
+    var empty = [];
+    for (var y = 1; y < ROWS - 1; y++) {
+      for (var x = 1; x < COLS - 1; x++) {
+        if (!occupied[y + "," + x]) empty.push([y, x]);
+      }
+    }
+    if (!empty.length) return null;
+    return empty[Math.floor(Math.random() * empty.length)];
+  }
+
+  // ===== 更新（每 TICK_MS 一次，对应原版 time.sleep(TICK_SECONDS)）=====
+  function update() {
+    if (pendingDir) {
+      // 禁止立即掉头
+      if (!(pendingDir[0] === -direction[0] && pendingDir[1] === -direction[1])) {
+        direction = pendingDir;
+      }
+      pendingDir = null;
+    }
+    var head = snake[0];
+    var ny = head[0] + direction[0];
+    var nx = head[1] + direction[1];
+    var hitsWall = ny === 0 || ny === ROWS - 1 || nx === 0 || nx === COLS - 1;
+    var hitsSelf = false;
+    for (var i = 0; i < snake.length - 1; i++) {
+      if (snake[i][0] === ny && snake[i][1] === nx) { hitsSelf = true; break; }
+    }
+    if (hitsWall || hitsSelf) {
+      state = "over";
+      return;
+    }
+    snake.unshift([ny, nx]);
+    if (food && ny === food[0] && nx === food[1]) {
+      score += 1;
+      food = newFood();
+      if (food === null) { state = "over"; return; } // 填满屏幕，原版同样结束
+    } else {
+      snake.pop();
+    }
+  }
+
+  // ===== 绘制 =====
+  function drawChar(ch, y, x, color, bold) {
+    ctx.fillStyle = color;
+    ctx.font = (bold ? "bold " : "") + CELL_H + "px 'Courier New', 'Menlo', monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(ch, x * CELL_W + CELL_W / 2, y * CELL_H + CELL_H / 2 + 1);
+  }
+
+  function drawText(str, y, x, color, bold) {
+    ctx.fillStyle = color;
+    ctx.font = (bold ? "bold " : "") + CELL_H + "px 'Courier New', 'Menlo', monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(str, x * CELL_W, y * CELL_H + CELL_H / 2 + 1);
+  }
+
+  // 粗略测量字符宽度（中文按 2 格），用于标题居中——对齐原版 addnstr 的观感
+  function textCells(str) {
+    var n = 0;
+    for (var i = 0; i < str.length; i++) n += str.charCodeAt(i) > 255 ? 2 : 1;
+    return n;
+  }
+
+  function draw() {
+    ctx.fillStyle = COLOR_BG;
+    ctx.fillRect(0, 0, W, H);
+
+    // 底纹：极淡的字符格
+    ctx.fillStyle = COLOR_GHOST;
+    for (var gy = 0; gy < ROWS; gy++) {
+      for (var gx = 0; gx < COLS; gx++) {
+        if ((gx + gy) % 2 === 0) ctx.fillRect(gx * CELL_W, gy * CELL_H, CELL_W, CELL_H);
+      }
+    }
+
+    // 边框字符（对应原版 screen.border()）
+    for (var bx = 0; bx < COLS; bx++) {
+      var topCh = bx === 0 ? "┌" : bx === COLS - 1 ? "┐" : "─";
+      var botCh = bx === 0 ? "└" : bx === COLS - 1 ? "┘" : "─";
+      drawChar(topCh, 0, bx, COLOR_DIM);
+      drawChar(botCh, ROWS - 1, bx, COLOR_DIM);
+    }
+    for (var by = 1; by < ROWS - 1; by++) {
+      drawChar("│", by, 0, COLOR_DIM);
+      drawChar("│", by, COLS - 1, COLOR_DIM);
+    }
+
+    // 顶部标题栏（对应原版第 0 行）
+    var titleX = Math.max(1, Math.floor((COLS - textCells(TITLE)) / 2));
+    drawText(TITLE, 0, titleX, COLOR_TEXT, true);
+    drawText(" 分数: " + score + " ", 0, 2, COLOR_TEXT, true);
+
+    // 食物 ●
+    if (food) drawChar("●", food[0], food[1], COLOR_FOOD, true);
+
+    // 蛇：头 ■ 身 □
+    for (var i = 0; i < snake.length; i++) {
+      drawChar(i === 0 ? "■" : "□", snake[i][0], snake[i][1], i === 0 ? COLOR_HEAD : COLOR_BODY, true);
+    }
+
+    // 结束提示（对应原版居中消息）
+    if (state === "over") {
+      var msg = "游戏结束！最终分数：" + score + "。按 R 再来一局，按其他键退出。";
+      var msgX = Math.max(1, Math.floor((COLS - textCells(msg)) / 2));
+      // 衬底，模拟终端字符块覆盖
+      ctx.fillStyle = COLOR_BG;
+      ctx.fillRect((msgX - 1) * CELL_W, Math.floor(ROWS / 2) * CELL_H, (textCells(msg) + 2) * CELL_W, CELL_H);
+      drawText(msg, Math.floor(ROWS / 2), msgX, COLOR_TEXT, true);
+    } else if (state === "quit") {
+      var qmsg = "已退出。按 R 重新开始。";
+      var qx = Math.max(1, Math.floor((COLS - textCells(qmsg)) / 2));
+      ctx.fillStyle = COLOR_BG;
+      ctx.fillRect((qx - 1) * CELL_W, Math.floor(ROWS / 2) * CELL_H, (textCells(qmsg) + 2) * CELL_W, CELL_H);
+      drawText(qmsg, Math.floor(ROWS / 2), qx, COLOR_TEXT, true);
+    }
+
+    // 署名
+    ctx.fillStyle = "rgba(77, 255, 122, 0.5)";
+    ctx.font = "13px 'Courier New', monospace";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "bottom";
+    ctx.fillText("by 吴子谦", W - 10, H - 6);
+  }
+
+  // ===== 主循环 =====
+  function loop(ts) {
+    if (!lastTick) lastTick = ts;
+    var dt = ts - lastTick;
+    lastTick = ts;
+    if (state === "playing") {
+      acc += dt;
+      while (acc >= TICK_MS) {
+        acc -= TICK_MS;
+        update();
+        if (state !== "playing") { acc = 0; break; }
+      }
+    }
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // ===== 输入 =====
+  var DIR_MAP = {
+    ArrowUp: [-1, 0], KeyW: [-1, 0],
+    ArrowDown: [1, 0], KeyS: [1, 0],
+    ArrowLeft: [0, -1], KeyA: [0, -1],
+    ArrowRight: [0, 1], KeyD: [0, 1]
+  };
+
+  function onKey(e) {
+    var code = e.code || e.key;
+    if (code === "ArrowUp" || code === "ArrowDown" || code === "ArrowLeft" || code === "ArrowRight" || code === "Space") {
+      e.preventDefault();
+    }
+    if (state === "playing") {
+      if (code === "KeyQ") { state = "quit"; return; }
+      var d = DIR_MAP[code];
+      if (d) pendingDir = d;
+    } else {
+      if (code === "KeyR") {
+        reset();
+      } else if (state === "over") {
+        // 原版：游戏结束后按其他键退出
+        state = "quit";
+      }
+    }
+  }
+
+  var wrap = document.getElementById("wrap");
+  window.addEventListener("keydown", onKey);
+  wrap.addEventListener("mousedown", function () { wrap.focus(); });
+  window.addEventListener("load", function () { wrap.focus(); });
+  wrap.focus();
+
+  // ===== CSS 自适应缩放（逻辑分辨率不变）=====
+  function fit() {
+    var scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    wrap.style.width = W + "px";
+    wrap.style.height = H + "px";
+    wrap.style.transform = "scale(" + scale + ")";
+    wrap.style.transformOrigin = "center center";
+    wrap.style.flex = "0 0 auto";
+  }
+  window.addEventListener("resize", fit);
+  fit();
+
+  reset();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

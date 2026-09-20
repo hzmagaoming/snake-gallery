@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>像素猫贪吃蛇</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #1a1a1a;
+            font-family: sans-serif;
+            color: #ecf0f1;
+        }
+        canvas {
+            box-shadow: 0 15px 30px rgba(0,0,0,0.8), 0 5px 15px rgba(0,0,0,0.5);
+            border-radius: 8px;
+        }
+        #score-board {
+            font-size: 24px;
+            margin-bottom: 15px;
+            text-shadow: 2px 2px 4px #000;
+        }
+        #game-over {
+            display: none;
+            position: absolute;
+            font-size: 30px;
+            color: #ff4757;
+            text-shadow: 2px 2px 4px #000;
+            background: rgba(0,0,0,0.7);
+            padding: 20px 40px;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="score-board">得分: 0</div>
+    <canvas id="gameCanvas" width="400" height="400"></canvas>
+    <div id="game-over">游戏结束！按空格键重新开始</div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreBoard = document.getElementById('score-board');
+        const gameOverText = document.getElementById('game-over');
+
+        const box = 20;
+        const rows = canvas.width / box;
+        
+        let snake = [];
+        let food = {};
+        let obstacles = [];
+        let direction = 'RIGHT';
+        let score = 0;
+        let gameInterval;
+        let isGameOver = false;
+        let animationTick = 0; // 用于控制身体扭动的动画帧
+
+        function initGame() {
+            snake = [
+                {x: 9 * box, y: 10 * box},
+                {x: 8 * box, y: 10 * box},
+                {x: 7 * box, y: 10 * box}
+            ];
+            direction = 'RIGHT';
+            score = 0;
+            isGameOver = false;
+            scoreBoard.innerText = `得分: ${score}`;
+            gameOverText.style.display = 'none';
+            
+            obstacles = [];
+            createObstacles(15);
+            createFood();
+            
+            if (gameInterval) clearInterval(gameInterval);
+            gameInterval = setInterval(draw, 100);
+        }
+
+        function isOccupied(x, y) {
+            if (food.x === x && food.y === y) return true;
+            for (let i = 0; i < snake.length; i++) {
+                if (snake[i].x === x && snake[i].y === y) return true;
+            }
+            for (let i = 0; i < obstacles.length; i++) {
+                if (obstacles[i].x === x && obstacles[i].y === y) return true;
+            }
+            return false;
+        }
+
+        function createObstacles(count) {
+            let attempts = 0;
+            while (obstacles.length < count && attempts < 1000) {
+                let obsX = Math.floor(Math.random() * rows) * box;
+                let obsY = Math.floor(Math.random() * rows) * box;
+                
+                let tooCloseToSnake = false;
+                for (let i = 0; i < snake.length; i++) {
+                    if (Math.abs(snake[i].x - obsX) < box * 2 && Math.abs(snake[i].y - obsY) < box * 2) {
+                        tooCloseToSnake = true;
+                        break;
+                    }
+                }
+
+                if (!isOccupied(obsX, obsY) && !tooCloseToSnake) {
+                    obstacles.push({x: obsX, y: obsY});
+                }
+                attempts++;
+            }
+        }
+
+        function createFood() {
+            let attempts = 0;
+            while (attempts < 1000) {
+                let foodX = Math.floor(Math.random() * rows) * box;
+                let foodY = Math.floor(Math.random() * rows) * box;
+                
+                if (!isOccupied(foodX, foodY)) {
+                    food = { x: foodX, y: foodY };
+                    return;
+                }
+                attempts++;
+            }
+        }
+
+        document.addEventListener('keydown', (event) => {
+            if (event.code === 'Space' && isGameOver) {
+                initGame();
+                return;
+            }
+
+            let newDir = direction;
+            switch(event.key) {
+                case 'ArrowLeft': if (direction !== 'RIGHT') newDir = 'LEFT'; break;
+                case 'ArrowUp': if (direction !== 'DOWN') newDir = 'UP'; break;
+                case 'ArrowRight': if (direction !== 'LEFT') newDir = 'RIGHT'; break;
+                case 'ArrowDown': if (direction !== 'UP') newDir = 'DOWN'; break;
+            }
+            direction = newDir;
+        });
+
+        function drawBackground() {
+            ctx.fillStyle = '#3e2723'; 
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.lineWidth = 2;
+            for (let i = 0; i < rows; i++) {
+                ctx.beginPath();
+                ctx.moveTo(0, i * box);
+                ctx.lineTo(canvas.width, i * box);
+                ctx.stroke();
+            }
+
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            for (let i = 0; i < 50; i++) {
+                ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, 2, 2);
+            }
+        }
+
+        function drawObstacles() {
+            for (let i = 0; i < obstacles.length; i++) {
+                let obs = obstacles[i];
+                ctx.save();
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+                ctx.shadowBlur = 4;
+                ctx.shadowOffsetX = 2;
+                ctx.shadowOffsetY = 2;
+
+                let grad = ctx.createLinearGradient(obs.x, obs.y, obs.x + box, obs.y + box);
+                grad.addColorStop(0, '#95a5a6');
+                grad.addColorStop(1, '#7f8c8d');
+                ctx.fillStyle = grad;
+                
+                const x = obs.x + 1;
+                const y = obs.y + 1;
+                const w = box - 2;
+                const h = box - 2;
+                const r = 3;
+                ctx.beginPath();
+                ctx.moveTo(x + r, y);
+                ctx.lineTo(x + w - r, y);
+                ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+                ctx.lineTo(x + w, y + h - r);
+                ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+                ctx.lineTo(x + r, y + h);
+                ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+                ctx.lineTo(x, y + r);
+                ctx.quadraticCurveTo(x, y, x + r, y);
+                ctx.closePath();
+                ctx.fill();
+
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                ctx.restore();
+            }
+        }
+
+        // 绘制像素猫头
+        function drawPixelCatHead(x, y, dir) {
+            ctx.save();
+            ctx.translate(x + box/2, y + box/2);
+            if (dir === 'RIGHT') ctx.rotate(0);
+            if (dir === 'DOWN') ctx.rotate(Math.PI / 2);
+            if (dir === 'LEFT') ctx.rotate(Math.PI);
+            if (dir === 'UP') ctx.rotate(-Math.PI / 2);
+            ctx.translate(-box/2, -box/2);
+
+            const p = 4; 
+            // 脸
+            ctx.fillStyle = '#f39c12';
+            ctx.fillRect(p, p*2, p*3, p*2); 
+            ctx.fillRect(0, p*3, p*5, p);    
+            // 耳朵
+            ctx.fillRect(0, p, p, p);        
+            ctx.fillRect(p*4, p, p, p);      
+            // 耳内
+            ctx.fillStyle = '#fd79a8';
+            ctx.fillRect(p, p*2, p, p);      
+            ctx.fillRect(p*3, p*2, p, p);    
+            // 眼睛
+            ctx.fillStyle = '#2d3436';
+            ctx.fillRect(p, p*3, p, p);      
+            ctx.fillRect(p*3, p*3, p, p);    
+            // 鼻子
+            ctx.fillStyle = '#fd79a8';
+            ctx.fillRect(p*2, p*4, p, p);    
+            // 嘴
+            ctx.fillStyle = '#2d3436';
+            ctx.fillRect(p*2, p*4 + 2, 1, 2); 
+            ctx.fillRect(p*2 - 1, p*4 + 3, 3, 1); 
+            // 胡须
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(p, p*4); ctx.lineTo(0, p*4 - 1);
+            ctx.moveTo(p, p*4 + 2); ctx.lineTo(0, p*4 + 3);
+            ctx.moveTo(p*4, p*4); ctx.lineTo(p*5, p*4 - 1);
+            ctx.moveTo(p*4, p*4 + 2); ctx.lineTo(p*5, p*4 + 3);
+            ctx.stroke();
+
+            ctx.restore();
+        }
+
+        // 绘制像素猫身体
+        function drawPixelCatBody(x, y, index, totalLength) {
+            ctx.save();
+            const p = 4; // 像素大小
+            
+            // 身体颜色渐变（越靠近尾巴颜色越深）
+            const colorIntensity = 50 - (index * 2);
+            ctx.fillStyle = `hsl(30, 90%, ${Math.max(colorIntensity, 20)}%)`;
+
+            // 绘制身体主体 (一个圆角矩形)
+            const bodyX = x + 2;
+            const bodyY = y + 4;
+            const bodyW = box - 4;
+            const bodyH = box - 8;
+            const r = 4;
+
+            ctx.beginPath();
+            ctx.moveTo(bodyX + r, bodyY);
+            ctx.lineTo(bodyX + bodyW - r, bodyY);
+            ctx.quadraticCurveTo(bodyX + bodyW, bodyY, bodyX + bodyW, bodyY + r);
+            ctx.lineTo(bodyX + bodyW, bodyY + bodyH - r);
+            ctx.quadraticCurveTo(bodyX + bodyW, bodyY + bodyH, bodyX + bodyW - r, bodyY + bodyH);
+            ctx.lineTo(bodyX + r, bodyY + bodyH);
+            ctx.quadraticCurveTo(bodyX, bodyY + bodyH, bodyX, bodyY + bodyH - r);
+            ctx.lineTo(bodyX, bodyY + r);
+            ctx.quadraticCurveTo(bodyX, bodyY, bodyX + r, bodyY);
+            ctx.closePath();
+            ctx.fill();
+
+            // 如果是身体第一节，画两条小短腿
+            if (index === 1) {
+                ctx.fillStyle = '#d35400'; // 深橙色腿
+                ctx.fillRect(x + 4, y + box - 6, 3, 4); // 左腿
+                ctx.fillRect(x + box - 7, y + box - 6, 3, 4); // 右腿
+            }
+
+            ctx.restore();
+        }
+
+        // 绘制像素猫尾巴
+        function drawPixelCatTail(x, y, prevX, prevY) {
+            ctx.save();
+            const p = 4;
+            ctx.fillStyle = '#d35400'; // 深橙色尾巴
+
+            // 计算尾巴朝向，使其指向身体
+            let tailOffsetX = 0;
+            let tailOffsetY = 0;
+
+            if (prevX > x) tailOffsetX = box - p; // 身体在右，尾巴向左
+            else if (prevX < x) tailOffsetX = 0;   // 身体在左，尾巴向右
+            else if (prevY > y) tailOffsetY = box - p; // 身体在下，尾巴向上
+            else if (prevY < y) tailOffsetY = 0;   // 身体在上，尾巴向下
+
+            // 绘制尾巴根部
+            ctx.fillRect(x + tailOffsetX, y + tailOffsetY, p, p);
+            // 绘制尾巴尖端（稍微偏移一点，形成弯曲效果）
+            ctx.fillRect(x + tailOffsetX + (tailOffsetX === 0 ? p : 0), y + tailOffsetY + (tailOffsetY === 0 ? p : 0), p, p);
+
+            ctx.restore();
+        }
+
+        function draw() {
+            if (isGameOver) return;
+
+            drawBackground();
+            drawObstacles();
+
+            // 绘制食物
+            ctx.save();
+            ctx.shadowColor = 'rgba(255, 0, 0, 0.6)';
+            ctx.shadowBlur = 15;
+            let gradient = ctx.createRadialGradient(
+                food.x + box/2, food.y + box/2, 2, 
+                food.x + box/2, food.y + box/2, box/2
+            );
+            gradient.addColorStop(0, '#ff7675');
+            gradient.addColorStop(1, '#d63031');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(food.x + box/2, food.y + box/2, box/2 - 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+
+            // 绘制猫
+            for (let i = 0; i < snake.length; i++) {
+                if (i === 0) {
+                    // 绘制猫头
+                    drawPixelCatHead(snake[i].x, snake[i].y, direction);
+                } else if (i === snake.length - 1 && snake.length > 1) {
+                    // 绘制猫尾巴（如果是最后一节且长度大于1）
+                    drawPixelCatTail(snake[i].x, snake[i].y, snake[i-1].x, snake[i-1].y);
+                } else {
+                    // 绘制猫身体
+                    drawPixelCatBody(snake[i].x, snake[i].y, i, snake.length);
+                }
+            }
+
+            // 逻辑部分
+            let snakeX = snake[0].x;
+            let snakeY = snake[0].y;
+
+            if (direction === 'LEFT') snakeX -= box;
+            if (direction === 'RIGHT') snakeX += box;
+            if (direction === 'UP') snakeY -= box;
+            if (direction === 'DOWN') snakeY += box;
+
+            if (snakeX < 0 || snakeX >= canvas.width || snakeY < 0 || snakeY >= canvas.height) {
+                endGame();
+                return;
+            }
+
+            for (let i = 0; i < snake.length; i++) {
+                if (snakeX === snake[i].x && snakeY === snake[i].y) {
+                    endGame();
+                    return;
+                }
+            }
+
+            for (let i = 0; i < obstacles.length; i++) {
+                if (snakeX === obstacles[i].x && snakeY === obstacles[i].y) {
+                    endGame();
+                    return;
+                }
+            }
+
+            if (snakeX === food.x && snakeY === food.y) {
+                score += 10;
+                scoreBoard.innerText = `得分: ${score}`;
+                createFood();
+            } else {
+                snake.pop();
+            }
+
+            const newHead = { x: snakeX, y: snakeY };
+            snake.unshift(newHead);
+            
+            animationTick++;
+        }
+
+        function endGame() {
+            isGameOver = true;
+            clearInterval(gameInterval);
+            gameOverText.style.display = 'block';
+        }
+
+        initGame();
+    </script>
+</body>
+</html>

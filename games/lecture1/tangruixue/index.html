@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>可爱贪吃蛇 - 豪华版</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #ebe6e1;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #stage {
+    position: relative;
+    line-height: 0;
+  }
+  canvas {
+    display: block;
+    outline: none;
+    cursor: default;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="game" width="800" height="600" tabindex="0"></canvas>
+</div>
+<script>
+"use strict";
+
+// ==================== 游戏配置 ====================
+const WINDOW_WIDTH = 800;
+const WINDOW_HEIGHT = 600;
+const GRID_SIZE = 20;
+const TICK_MS = 100;               // 网页版节奏约 10fps（原版 7fps）
+
+const BOARD_WIDTH = 600;
+const BOARD_HEIGHT = 480;
+const BOARD_X = (WINDOW_WIDTH - BOARD_WIDTH) / 2;   // 100
+const BOARD_Y = (WINDOW_HEIGHT - BOARD_HEIGHT) / 2 + 20; // 80
+
+// ==================== 莫兰迪配色 ====================
+const COLOR_BG_TOP = [252, 250, 248];
+const COLOR_BG_BOTTOM = [235, 230, 225];
+const COLOR_CARD_BG = "rgba(255,255,255,0.71)";
+const COLOR_SHADOW = "rgba(0,0,0,0.12)";
+const COLOR_TEXT_DARK = "rgb(80,80,80)";
+const COLOR_TEXT_LIGHT = "rgb(150,150,150)";
+const COLOR_ACCENT = "rgb(180,140,140)";
+const COLOR_BOARD_BG = "rgb(245,242,240)";
+const COLOR_BOARD_BORDER = "rgb(220,215,210)";
+const COLOR_GRID_DOT = "rgb(235,230,225)";
+const COLOR_SNAKE_HEAD = "rgb(120,160,130)";
+const COLOR_SNAKE_BODY = "rgb(160,195,170)";
+const COLOR_SNAKE_SHADOW = "rgb(200,210,205)";
+const COLOR_SNAKE_CHEEK = "rgb(225,175,175)";
+const COLOR_FOOD_APPLE = "rgb(205,135,135)";
+const COLOR_FOOD_STRAWBERRY = "rgb(190,120,120)";
+const COLOR_FOOD_ORANGE = "rgb(210,160,130)";
+const COLOR_FOOD_LEAF = "rgb(150,175,145)";
+const COLOR_FOOD_STEM = "rgb(130,120,110)";
+const COLOR_OBSTACLE = "rgb(170,165,160)";
+const COLOR_OBSTACLE_BORDER = "rgb(140,135,130)";
+
+const GRID_COLS = BOARD_WIDTH / GRID_SIZE;  // 30
+const GRID_ROWS = BOARD_HEIGHT / GRID_SIZE; // 24
+
+const OBSTACLE_COUNT = 6;
+const OBSTACLE_REFRESH_MS = 3000;
+
+const HS_KEY = "sg-l1-tangruixue-highscore";
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+// ==================== 自适应缩放 ====================
+const stage = document.getElementById("stage");
+function fitStage() {
+  const scale = Math.min(window.innerWidth / WINDOW_WIDTH, window.innerHeight / WINDOW_HEIGHT);
+  stage.style.width = WINDOW_WIDTH * scale + "px";
+  stage.style.height = WINDOW_HEIGHT * scale + "px";
+  canvas.style.width = WINDOW_WIDTH * scale + "px";
+  canvas.style.height = WINDOW_HEIGHT * scale + "px";
+}
+window.addEventListener("resize", fitStage);
+fitStage();
+
+// ==================== 核心渲染工具 ====================
+function drawGradientBg() {
+  const g = ctx.createLinearGradient(0, 0, 0, WINDOW_HEIGHT);
+  g.addColorStop(0, `rgb(${COLOR_BG_TOP[0]},${COLOR_BG_TOP[1]},${COLOR_BG_TOP[2]})`);
+  g.addColorStop(1, `rgb(${COLOR_BG_BOTTOM[0]},${COLOR_BG_BOTTOM[1]},${COLOR_BG_BOTTOM[2]})`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+}
+
+function drawShadow(x, y, w, h, offset, radius) {
+  ctx.fillStyle = COLOR_SHADOW;
+  roundRect(x + offset, y + offset, w, h, radius);
+  ctx.fill();
+}
+
+function drawPanel(x, y, w, h, radius) {
+  ctx.fillStyle = COLOR_CARD_BG;
+  roundRect(x, y, w, h, radius);
+  ctx.fill();
+}
+
+function circle(cx, cy, r, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// ==================== 游戏逻辑 ====================
+function posKey(col, row) { return col + "," + row; }
+
+function generateObstacles(snakeBody, fruits) {
+  const obstacles = new Map();
+  const centerCol = GRID_COLS >> 1, centerRow = GRID_ROWS >> 1;
+  const snakeSet = new Set(snakeBody.map(p => posKey(p.col, p.row)));
+  const fruitSet = new Set(fruits.map(f => posKey(f.col, f.row)));
+
+  let attempts = 0;
+  while (obstacles.size < OBSTACLE_COUNT && attempts < 100) {
+    attempts++;
+    const col = 1 + Math.floor(Math.random() * (GRID_COLS - 2));
+    const row = 1 + Math.floor(Math.random() * (GRID_ROWS - 2));
+    if (Math.abs(col - centerCol) < 4 && Math.abs(row - centerRow) < 4) continue;
+    const key = posKey(col, row);
+    if (snakeSet.has(key) || fruitSet.has(key)) continue; // 避开蛇身与水果
+    obstacles.set(key, { col, row });
+  }
+  return obstacles;
+}
+
+const FRUIT_TYPES = ["apple", "strawberry", "orange"];
+
+function generateSingleFruit(snakeBody, obstacles, existingFruits) {
+  const snakeSet = new Set(snakeBody.map(p => posKey(p.col, p.row)));
+  const fruitSet = new Set(existingFruits.map(f => posKey(f.col, f.row)));
+  for (let i = 0; i < 100; i++) {
+    const col = Math.floor(Math.random() * GRID_COLS);
+    const row = Math.floor(Math.random() * GRID_ROWS);
+    const key = posKey(col, row);
+    if (!snakeSet.has(key) && !obstacles.has(key) && !fruitSet.has(key)) {
+      return { col, row, type: FRUIT_TYPES[Math.floor(Math.random() * FRUIT_TYPES.length)] };
+    }
+  }
+  return null;
+}
+
+function generateFruits(snakeBody, obstacles) {
+  const fruits = [];
+  const numFruits = 1 + Math.floor(Math.random() * 3); // 1~3 个
+  for (let i = 0; i < numFruits; i++) {
+    const fruit = generateSingleFruit(snakeBody, obstacles, fruits);
+    if (fruit) fruits.push(fruit);
+  }
+  return fruits;
+}
+
+// ==================== 棋盘与元素绘制 ====================
+function drawBoardDots() {
+  ctx.fillStyle = COLOR_BOARD_BG;
+  roundRect(BOARD_X, BOARD_Y, BOARD_WIDTH, BOARD_HEIGHT, 15);
+  ctx.fill();
+  ctx.strokeStyle = COLOR_BOARD_BORDER;
+  ctx.lineWidth = 2;
+  roundRect(BOARD_X, BOARD_Y, BOARD_WIDTH, BOARD_HEIGHT, 15);
+  ctx.stroke();
+  ctx.fillStyle = COLOR_GRID_DOT;
+  for (let x = BOARD_X; x < BOARD_X + BOARD_WIDTH; x += GRID_SIZE) {
+    for (let y = BOARD_Y; y < BOARD_Y + BOARD_HEIGHT; y += GRID_SIZE) {
+      ctx.beginPath();
+      ctx.arc(x + GRID_SIZE / 2, y + GRID_SIZE / 2, 1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function drawObstacles(obstacles) {
+  for (const o of obstacles.values()) {
+    const cx = BOARD_X + o.col * GRID_SIZE + GRID_SIZE / 2;
+    const cy = BOARD_Y + o.row * GRID_SIZE + GRID_SIZE / 2;
+    circle(cx + 2, cy + 2, GRID_SIZE / 2 - 1, "rgb(210,205,200)");
+    circle(cx, cy, GRID_SIZE / 2 - 1, COLOR_OBSTACLE);
+    circle(cx - 2, cy - 2, 3, COLOR_OBSTACLE_BORDER);
+    circle(cx + 3, cy + 2, 2, COLOR_OBSTACLE_BORDER);
+  }
+}
+
+function drawFruit(col, row, fruitType, timeTicks) {
+  const scale = 1.0 + 0.12 * Math.sin(timeTicks / 200.0); // 呼吸缩放
+  const cx = BOARD_X + col * GRID_SIZE + GRID_SIZE / 2;
+  const cy = BOARD_Y + row * GRID_SIZE + GRID_SIZE / 2;
+  const radius = Math.floor((GRID_SIZE / 2 - 2) * scale);
+
+  if (fruitType === "apple") {
+    circle(cx + 2, cy + 2, radius, COLOR_SNAKE_SHADOW);
+    circle(cx, cy + 1, radius, COLOR_FOOD_APPLE);
+    circle(cx - 4, cy - 3, Math.max(1, radius >> 2), "rgb(235,190,190)");
+    ctx.strokeStyle = COLOR_FOOD_STEM;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - radius + 2);
+    ctx.lineTo(cx + 2, cy - radius - 3);
+    ctx.stroke();
+    ctx.fillStyle = COLOR_FOOD_LEAF;
+    ctx.beginPath();
+    ctx.moveTo(cx + 2, cy - radius - 1);
+    ctx.lineTo(cx + 8, cy - radius - 5);
+    ctx.lineTo(cx + 5, cy - radius - 1);
+    ctx.lineTo(cx + 10, cy - radius + 1);
+    ctx.closePath();
+    ctx.fill();
+  } else if (fruitType === "strawberry") {
+    ctx.fillStyle = COLOR_SNAKE_SHADOW;
+    ctx.beginPath();
+    ctx.ellipse(cx + 1, cy + 3, radius, radius + 1, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = COLOR_FOOD_STRAWBERRY;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 1, radius, radius + 1, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = COLOR_FOOD_LEAF;
+    ctx.beginPath();
+    ctx.moveTo(cx - 5, cy - radius + 2);
+    ctx.lineTo(cx + 5, cy - radius + 2);
+    ctx.lineTo(cx, cy - radius - 4);
+    ctx.closePath();
+    ctx.fill();
+    circle(cx - 3, cy, 1, "rgb(255,230,230)");
+    circle(cx + 3, cy + 2, 1, "rgb(255,230,230)");
+    circle(cx, cy + 4, 1, "rgb(255,230,230)");
+  } else { // orange
+    circle(cx + 2, cy + 2, radius, COLOR_SNAKE_SHADOW);
+    circle(cx, cy, radius, COLOR_FOOD_ORANGE);
+    circle(cx - 3, cy - 3, Math.max(1, radius >> 2), "rgb(240,200,170)");
+    ctx.fillStyle = COLOR_FOOD_LEAF;
+    ctx.beginPath();
+    ctx.ellipse(cx + 0.5, cy - radius - 2.5, 3.5, 1.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawSnake(snakeBody, direction) {
+  for (let i = snakeBody.length - 1; i >= 0; i--) {
+    const { col, row } = snakeBody[i];
+    const cx = BOARD_X + col * GRID_SIZE + GRID_SIZE / 2;
+    const cy = BOARD_Y + row * GRID_SIZE + GRID_SIZE / 2;
+
+    if (i === 0) {
+      const hx = BOARD_X + col * GRID_SIZE, hy = BOARD_Y + row * GRID_SIZE;
+      drawShadow(hx, hy, GRID_SIZE, GRID_SIZE, 2, 12);
+      ctx.fillStyle = COLOR_SNAKE_HEAD;
+      roundRect(hx, hy, GRID_SIZE, GRID_SIZE, 12);
+      ctx.fill();
+
+      const { dx, dy } = direction;
+      const eyeR = 4, pupilR = 2;
+      let eye1, eye2, cheek;
+      if (dx === 1)       { eye1 = [cx + 5, cy - 5]; eye2 = [cx + 5, cy + 5]; cheek = [cx + 2, cy + 7]; }
+      else if (dx === -1) { eye1 = [cx - 5, cy - 5]; eye2 = [cx - 5, cy + 5]; cheek = [cx - 2, cy + 7]; }
+      else if (dy === -1) { eye1 = [cx - 5, cy - 5]; eye2 = [cx + 5, cy - 5]; cheek = [cx + 7, cy - 2]; }
+      else                { eye1 = [cx - 5, cy + 5]; eye2 = [cx + 5, cy + 5]; cheek = [cx + 7, cy + 2]; }
+
+      circle(eye1[0], eye1[1], eyeR, "rgb(255,255,255)");
+      circle(eye2[0], eye2[1], eyeR, "rgb(255,255,255)");
+      circle(eye1[0], eye1[1], pupilR, "rgb(60,60,60)");
+      circle(eye2[0], eye2[1], pupilR, "rgb(60,60,60)");
+      circle(cheek[0], cheek[1], 3, COLOR_SNAKE_CHEEK); // 腮红
+    } else {
+      const bx = BOARD_X + col * GRID_SIZE + 1, by = BOARD_Y + row * GRID_SIZE + 1;
+      drawShadow(bx, by, GRID_SIZE - 2, GRID_SIZE - 2, 2, 8);
+      ctx.fillStyle = COLOR_SNAKE_BODY;
+      roundRect(bx, by, GRID_SIZE - 2, GRID_SIZE - 2, 8);
+      ctx.fill();
+    }
+  }
+}
+
+// ==================== 界面渲染 ====================
+const FONT_TEXT = '20px "PingFang SC","Microsoft YaHei",sans-serif';
+const FONT_BTN = 'bold 22px "PingFang SC","Microsoft YaHei",sans-serif';
+const FONT_TITLE = 'bold 48px "PingFang SC","Microsoft YaHei",sans-serif';
+
+function drawHud(score, highScore) {
+  drawShadow(BOARD_X, BOARD_Y - 60, BOARD_WIDTH, 45, 3, 10);
+  drawPanel(BOARD_X, BOARD_Y - 60, BOARD_WIDTH, 45, 10);
+  ctx.font = FONT_BTN;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = COLOR_TEXT_DARK;
+  ctx.fillText(`当前分数: ${score}`, BOARD_X + 20, BOARD_Y - 50 + 12);
+  ctx.fillStyle = COLOR_TEXT_LIGHT;
+  ctx.fillText(`最高分: ${highScore}`, BOARD_X + BOARD_WIDTH - 140, BOARD_Y - 50 + 12);
+}
+
+const startBtn = { cx: WINDOW_WIDTH / 2, cy: WINDOW_HEIGHT / 2 + 95, w: 200, h: 50 };
+const restartBtn = { cx: WINDOW_WIDTH / 2, cy: WINDOW_HEIGHT / 2 + 60, w: 160, h: 45 };
+const quitBtn = { cx: WINDOW_WIDTH / 2, cy: WINDOW_HEIGHT / 2 + 120, w: 160, h: 45 };
+
+function inButton(btn, x, y) {
+  return Math.abs(x - btn.cx) <= btn.w / 2 && Math.abs(y - btn.cy) <= btn.h / 2;
+}
+
+function drawStartScreen(timeTicks) {
+  drawGradientBg();
+
+  // 漂浮装饰圆
+  for (let i = 0; i < 6; i++) {
+    const offsetY = Math.sin(timeTicks / 1000.0 + i) * 20;
+    circle(80 + i * 140, 100 + offsetY, 30 + i * 8, "rgb(225,220,215)");
+    circle(120 + i * 130, 450 - offsetY, 25 + i * 5, "rgb(235,230,225)");
+  }
+
+  // 演示小蛇
+  const demoSnake = [[10, 5], [9, 5], [8, 5]];
+  demoSnake.forEach(([col, row], i) => {
+    const cx = BOARD_X + col * GRID_SIZE + GRID_SIZE / 2;
+    const cy = BOARD_Y + row * GRID_SIZE + GRID_SIZE / 2;
+    if (i === 0) {
+      ctx.fillStyle = COLOR_SNAKE_HEAD;
+      roundRect(BOARD_X + col * GRID_SIZE, BOARD_Y + row * GRID_SIZE, GRID_SIZE, GRID_SIZE, 12);
+      ctx.fill();
+      circle(cx + 5, cy - 5, 4, "rgb(255,255,255)");
+      circle(cx + 5, cy + 5, 4, "rgb(255,255,255)");
+      circle(cx + 5, cy - 5, 2, "rgb(60,60,60)");
+      circle(cx + 5, cy + 5, 2, "rgb(60,60,60)");
+    } else {
+      ctx.fillStyle = COLOR_SNAKE_BODY;
+      roundRect(BOARD_X + col * GRID_SIZE + 1, BOARD_Y + row * GRID_SIZE + 1, GRID_SIZE - 2, GRID_SIZE - 2, 8);
+      ctx.fill();
+    }
+  });
+  drawFruit(20, 5, "strawberry", timeTicks);
+  drawFruit(20, 15, "orange", timeTicks);
+
+  // 中央卡片
+  const cardX = WINDOW_WIDTH / 2 - 250, cardY = WINDOW_HEIGHT / 2 - 180;
+  drawShadow(cardX, cardY, 500, 360, 6, 20);
+  drawPanel(cardX, cardY, 500, 360, 20);
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = FONT_TITLE;
+  ctx.fillStyle = COLOR_SNAKE_HEAD;
+  ctx.fillText("贪吃蛇", WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 - 80);
+
+  ctx.font = FONT_TEXT;
+  ctx.fillStyle = COLOR_TEXT_LIGHT;
+  ctx.fillText("↑ ↓ ← →   控制小蛇方向", WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 - 10);
+  ctx.fillText("吃水果变长，不要撞墙、撞石头或撞自己", WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 + 25);
+
+  // 呼吸按钮
+  const scale = 1.0 + 0.05 * Math.sin(timeTicks / 200.0);
+  const bw = 200 * scale, bh = 50 * scale;
+  ctx.fillStyle = COLOR_SNAKE_HEAD;
+  roundRect(startBtn.cx - bw / 2, startBtn.cy - bh / 2, bw, bh, 25);
+  ctx.fill();
+  ctx.font = FONT_BTN;
+  ctx.fillStyle = "rgb(255,255,255)";
+  ctx.fillText("开 始 游 戏", startBtn.cx, startBtn.cy + 1);
+}
+
+function drawGameOverScreen(score, highScore) {
+  // 深色渐变遮罩
+  const g = ctx.createLinearGradient(0, 0, 0, WINDOW_HEIGHT);
+  g.addColorStop(0, "rgba(40,40,40,0)");
+  g.addColorStop(1, "rgba(40,40,40,0.71)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+
+  const cardX = WINDOW_WIDTH / 2 - 200, cardY = WINDOW_HEIGHT / 2 - 150;
+  drawShadow(cardX, cardY, 400, 300, 8, 20);
+  drawPanel(cardX, cardY, 400, 300, 20);
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = FONT_TITLE;
+  ctx.fillStyle = COLOR_ACCENT;
+  ctx.fillText("游戏结束", WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 - 80);
+
+  ctx.font = FONT_TEXT;
+  ctx.fillStyle = COLOR_TEXT_LIGHT;
+  ctx.fillText("本局得分", WINDOW_WIDTH / 2 - 60, WINDOW_HEIGHT / 2);
+  ctx.font = FONT_TITLE;
+  ctx.fillStyle = COLOR_SNAKE_HEAD;
+  ctx.fillText(String(score), WINDOW_WIDTH / 2 + 45, WINDOW_HEIGHT / 2 - 8);
+
+  ctx.fillStyle = COLOR_SNAKE_HEAD;
+  roundRect(restartBtn.cx - restartBtn.w / 2, restartBtn.cy - restartBtn.h / 2, restartBtn.w, restartBtn.h, 22);
+  ctx.fill();
+  ctx.font = FONT_BTN;
+  ctx.fillStyle = "rgb(255,255,255)";
+  ctx.fillText("再来一局 (R)", restartBtn.cx, restartBtn.cy + 1);
+
+  ctx.fillStyle = "rgb(200,190,190)";
+  roundRect(quitBtn.cx - quitBtn.w / 2, quitBtn.cy - quitBtn.h / 2, quitBtn.w, quitBtn.h, 22);
+  ctx.fill();
+  ctx.fillStyle = "rgb(255,255,255)";
+  ctx.fillText("退出游戏 (Q)", quitBtn.cx, quitBtn.cy + 1);
+}
+
+function drawCredit() {
+  ctx.font = '12px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.textAlign = "right";
+  ctx.textBaseline = "bottom";
+  ctx.fillStyle = "rgba(120,115,110,0.85)";
+  ctx.fillText("by 唐瑞雪", WINDOW_WIDTH - 10, WINDOW_HEIGHT - 8);
+}
+
+// ==================== 游戏状态 ====================
+let state = "START";
+let snakeBody, direction, pendingDirection, fruits, obstacles, score;
+let highScore = 0;
+try { highScore = parseInt(localStorage.getItem(HS_KEY) || "0", 10) || 0; } catch (e) { highScore = 0; }
+let lastObstacleRefreshTime = 0;
+let lastTickTime = 0;
+
+function saveHighScore() {
+  try { localStorage.setItem(HS_KEY, String(highScore)); } catch (e) { /* ignore */ }
+}
+
+function resetGame() {
+  const centerCol = GRID_COLS >> 1, centerRow = GRID_ROWS >> 1;
+  snakeBody = [
+    { col: centerCol, row: centerRow },
+    { col: centerCol - 1, row: centerRow },
+    { col: centerCol - 2, row: centerRow },
+  ];
+  direction = { dx: 1, dy: 0 };
+  pendingDirection = null;
+  obstacles = generateObstacles(snakeBody, []);
+  fruits = generateFruits(snakeBody, obstacles);
+  score = 0;
+}
+
+function startGame(now) {
+  resetGame();
+  lastObstacleRefreshTime = now;
+  lastTickTime = now;
+  state = "PLAYING";
+}
+
+function gameOver() {
+  state = "GAMEOVER";
+  if (score > highScore) {
+    highScore = score;
+    saveHighScore();
+  }
+}
+
+function tick(now) {
+  if (pendingDirection) {
+    direction = pendingDirection;
+    pendingDirection = null;
+  }
+
+  if (now - lastObstacleRefreshTime > OBSTACLE_REFRESH_MS) {
+    obstacles = generateObstacles(snakeBody, fruits);
+    lastObstacleRefreshTime = now;
+  }
+
+  const head = snakeBody[0];
+  const newHead = { col: head.col + direction.dx, row: head.row + direction.dy };
+  const newKey = posKey(newHead.col, newHead.row);
+  const hitSelf = snakeBody.some(p => posKey(p.col, p.row) === newKey);
+
+  if (newHead.col < 0 || newHead.col >= GRID_COLS ||
+      newHead.row < 0 || newHead.row >= GRID_ROWS ||
+      hitSelf || obstacles.has(newKey)) {
+    gameOver();
+    return;
+  }
+
+  snakeBody.unshift(newHead);
+  const eatenIndex = fruits.findIndex(f => f.col === newHead.col && f.row === newHead.row);
+  if (eatenIndex >= 0) {
+    score += 1;
+    fruits.splice(eatenIndex, 1);
+    fruits = generateFruits(snakeBody, obstacles);
+  } else {
+    snakeBody.pop();
+  }
+}
+
+// ==================== 主循环 ====================
+function frame(now) {
+  if (state === "PLAYING" && now - lastTickTime >= TICK_MS) {
+    lastTickTime = now;
+    tick(now);
+  }
+
+  if (state === "START") {
+    drawStartScreen(now);
+  } else {
+    drawGradientBg();
+    drawBoardDots();
+    drawObstacles(obstacles);
+    for (const f of fruits) drawFruit(f.col, f.row, f.type, now);
+    drawSnake(snakeBody, direction);
+    drawHud(score, highScore);
+    if (state === "GAMEOVER") drawGameOverScreen(score, highScore);
+  }
+  drawCredit();
+  requestAnimationFrame(frame);
+}
+resetGame();
+requestAnimationFrame(frame);
+
+// ==================== 输入：键盘 ====================
+const DIRS = {
+  ArrowUp: { dx: 0, dy: -1 }, ArrowDown: { dx: 0, dy: 1 },
+  ArrowLeft: { dx: -1, dy: 0 }, ArrowRight: { dx: 1, dy: 0 },
+  w: { dx: 0, dy: -1 }, s: { dx: 0, dy: 1 },
+  a: { dx: -1, dy: 0 }, d: { dx: 1, dy: 0 },
+  W: { dx: 0, dy: -1 }, S: { dx: 0, dy: 1 },
+  A: { dx: -1, dy: 0 }, D: { dx: 1, dy: 0 },
+};
+
+window.addEventListener("keydown", (e) => {
+  const key = e.key;
+  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(key)) {
+    e.preventDefault();
+  }
+
+  if (state === "START") {
+    if (key === " " || key === "Enter") startGame(performance.now());
+  } else if (state === "PLAYING") {
+    const d = DIRS[key];
+    if (d) {
+      const cur = pendingDirection || direction;
+      if (!(d.dx === -cur.dx && d.dy === -cur.dy) && !(d.dx === cur.dx && d.dy === cur.dy)) {
+        pendingDirection = d;
+      }
+    }
+  } else if (state === "GAMEOVER") {
+    if (key === "r" || key === "R") startGame(performance.now());
+    else if (key === "q" || key === "Q") { resetGame(); state = "START"; }
+  }
+});
+
+// ==================== 输入：鼠标 ====================
+function canvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = WINDOW_WIDTH / rect.width;
+  const scaleY = WINDOW_HEIGHT / rect.height;
+  return [(e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY];
+}
+
+canvas.addEventListener("mousedown", (e) => {
+  canvas.focus();
+  const [x, y] = canvasPos(e);
+  if (state === "START") {
+    if (inButton(startBtn, x, y)) startGame(performance.now());
+  } else if (state === "GAMEOVER") {
+    if (inButton(restartBtn, x, y)) startGame(performance.now());
+    else if (inButton(quitBtn, x, y)) { resetGame(); state = "START"; }
+  }
+});
+
+canvas.addEventListener("mousemove", (e) => {
+  const [x, y] = canvasPos(e);
+  let hover = false;
+  if (state === "START") hover = inButton(startBtn, x, y);
+  else if (state === "GAMEOVER") hover = inButton(restartBtn, x, y) || inButton(quitBtn, x, y);
+  canvas.style.cursor = hover ? "pointer" : "default";
+});
+
+canvas.focus();
+window.addEventListener("load", () => canvas.focus());
+</script>
+</body>
+</html>

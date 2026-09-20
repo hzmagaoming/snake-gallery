@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>霓虹贪吃蛇 · Neon Snake</title>
+<style>
+    html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #04060c;
+        overflow: hidden;
+    }
+    body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    #gameCanvas {
+        background: #080b14;
+        outline: none;
+        border-radius: 6px;
+        box-shadow: 0 0 40px rgba(60, 224, 140, 0.08), 0 10px 30px rgba(0,0,0,0.6);
+    }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="624" height="632" tabindex="0"></canvas>
+<script>
+(function () {
+"use strict";
+
+// ==================== 尺寸 ====================
+var CELL = 24;
+var COLS = 26, ROWS = 24;
+var HUD_H = 56;
+var WIDTH = COLS * CELL;
+var HEIGHT = HUD_H + ROWS * CELL;
+
+var BASE_STEP = 0.125;
+var FAST_STEP = 0.062;
+var SLOW_STEP = 0.20;
+var MIN_STEP = 0.062;
+
+// ==================== 配色 ====================
+var BG       = "#080b14";
+var GRID     = "#0f1626";
+var HUD_BG   = "#0a0f1c";
+var BORDER   = "#1c2a44";
+var SHADOW   = "#04060c";
+
+var HEAD_C   = "#8dffc0";
+var BODY_TOP = "#3ce08c";
+var BODY_END = "#0a5c3c";
+
+var WALL_C   = "#1e2a42";
+var WALL_E   = "#2f4166";
+var WALL_HI  = "#3b5482";
+
+var TEXT     = "#eaf2ff";
+var DIM      = "#5b6b8c";
+var GOLD     = "#ffd23f";
+
+var FOODS = {
+    normal: { color: "#ff4757", hi: "#ff8a94", score: 10, grow: 1, weight: 60, life: 0 },
+    gold:   { color: "#ffd23f", hi: "#fff3b0", score: 50, grow: 2, weight: 12, life: 9.0 },
+    slow:   { color: "#38bdf8", hi: "#a5e8ff", score: 15, grow: 1, weight: 9,  life: 11.0 },
+    fast:   { color: "#a78bfa", hi: "#ddd0ff", score: 15, grow: 1, weight: 9,  life: 11.0 },
+    shield: { color: "#2dd4bf", hi: "#a0fff0", score: 15, grow: 1, weight: 8,  life: 12.0 }
+};
+var FOOD_KEYS = ["normal", "gold", "slow", "fast", "shield"];
+
+var UP = [0, -1], DOWN = [0, 1], LEFT = [-1, 0], RIGHT = [1, 0];
+
+var HS_KEY = "sg-l1-lihaoran-highscore";
+
+var FONT_CJK = '"Microsoft YaHei","微软雅黑","PingFang SC","Heiti SC","Noto Sans CJK SC",sans-serif';
+var FONT_MONO = 'Consolas,"JetBrains Mono","DejaVu Sans Mono",Menlo,Monaco,"Courier New",monospace';
+
+// ==================== 工具 ====================
+function hex2rgb(h) {
+    h = h.replace("#", "");
+    return [parseInt(h.substr(0, 2), 16), parseInt(h.substr(2, 2), 16), parseInt(h.substr(4, 2), 16)];
+}
+function clamp255(v) { return Math.max(0, Math.min(255, Math.round(v))); }
+function lerpColor(c1, c2, t) {
+    var a = hex2rgb(c1), b = hex2rgb(c2);
+    return "rgb(" + clamp255(a[0] + (b[0] - a[0]) * t) + "," +
+                    clamp255(a[1] + (b[1] - a[1]) * t) + "," +
+                    clamp255(a[2] + (b[2] - a[2]) * t) + ")";
+}
+function blend(fg, bg, a) {
+    var f = hex2rgb(fg), b = hex2rgb(bg);
+    return "rgb(" + clamp255(f[0] * a + b[0] * (1 - a)) + "," +
+                    clamp255(f[1] * a + b[1] * (1 - a)) + "," +
+                    clamp255(f[2] * a + b[2] * (1 - a)) + ")";
+}
+function key(x, y) { return x + "," + y; }
+
+// ==================== 画布 ====================
+var canvas = document.getElementById("gameCanvas");
+var ctx = canvas.getContext("2d");
+
+function fitCanvas() {
+    var scale = Math.min(window.innerWidth / WIDTH, window.innerHeight / HEIGHT);
+    scale = Math.max(0.1, scale);
+    canvas.style.width = (WIDTH * scale) + "px";
+    canvas.style.height = (HEIGHT * scale) + "px";
+}
+window.addEventListener("resize", fitCanvas);
+fitCanvas();
+
+// ==================== 存档 ====================
+function loadHS() {
+    try {
+        var v = parseInt(localStorage.getItem(HS_KEY), 10);
+        return isNaN(v) ? 0 : v;
+    } catch (e) { return 0; }
+}
+function saveHS() {
+    try { localStorage.setItem(HS_KEY, String(Math.floor(highScore))); } catch (e) {}
+}
+
+// ==================== 状态 ====================
+var snake, visSnake, direction, nextDir, growPending, score, gameOver, paused;
+var walls, particles, slowT, fastT, shieldT, moveAcc, time, shake;
+var banner, bannerT, deathCause, wallsMilestone;
+var food, foodType, foodLife, headPulse, highScore;
+
+function reset() {
+    var cx = COLS >> 1, cy = ROWS >> 1;
+    snake = [];
+    visSnake = [];
+    for (var i = 0; i < 4; i++) {
+        snake.push([cx - i, cy]);
+        visSnake.push([cx - i, cy]);
+    }
+    direction = RIGHT;
+    nextDir = RIGHT;
+    growPending = 0;
+    score = 0;
+    gameOver = false;
+    paused = false;
+    walls = {};
+    particles = [];
+    slowT = 0; fastT = 0; shieldT = 0;
+    moveAcc = 0; time = 0; shake = 0;
+    banner = ""; bannerT = 0;
+    deathCause = "";
+    wallsMilestone = 0;
+    food = null; foodType = "normal"; foodLife = null;
+    headPulse = 0;
+
+    for (var w = 0; w < 8; w++) addWall();
+    spawnFood();
+}
+
+// ---------------- 障碍物 ----------------
+function addWall() {
+    var count = Object.keys(walls).length;
+    if (count >= 60) return;
+    var hx = snake[0][0], hy = snake[0][1];
+    var dirs = [UP, DOWN, LEFT, RIGHT];
+    for (var tries = 0; tries < 400; tries++) {
+        var x = Math.floor(Math.random() * COLS);
+        var y = Math.floor(Math.random() * ROWS);
+        if (walls[key(x, y)]) continue;
+        var onSnake = false;
+        for (var i = 0; i < snake.length; i++) {
+            if (snake[i][0] === x && snake[i][1] === y) { onSnake = true; break; }
+        }
+        if (onSnake) continue;
+        if (Math.abs(x - hx) + Math.abs(y - hy) < 8) continue;
+        if (food && food[0] === x && food[1] === y) continue;
+        var near = 0;
+        for (var d = 0; d < 4; d++) {
+            if (walls[key(x + dirs[d][0], y + dirs[d][1])]) near++;
+        }
+        if (near >= 2) continue;
+        walls[key(x, y)] = [x, y];
+        return;
+    }
+}
+
+// ---------------- 食物 ----------------
+function spawnFood() {
+    var occupied = {};
+    var i, x, y;
+    for (i = 0; i < snake.length; i++) occupied[key(snake[i][0], snake[i][1])] = true;
+    for (var k in walls) occupied[k] = true;
+    var empty = [];
+    for (x = 0; x < COLS; x++) {
+        for (y = 0; y < ROWS; y++) {
+            if (!occupied[key(x, y)]) empty.push([x, y]);
+        }
+    }
+    if (!empty.length) { food = null; return; }
+    var names = [], weights = [];
+    for (i = 0; i < FOOD_KEYS.length; i++) {
+        var kk = FOOD_KEYS[i];
+        if (kk === "gold" && score < 30) continue;
+        if (kk === "shield" && score < 60) continue;
+        names.push(kk);
+        weights.push(FOODS[kk].weight);
+    }
+    var total = 0;
+    for (i = 0; i < weights.length; i++) total += weights[i];
+    var r = Math.random() * total, kind = names[0];
+    for (i = 0; i < names.length; i++) {
+        r -= weights[i];
+        if (r <= 0) { kind = names[i]; break; }
+    }
+    foodType = kind;
+    food = empty[Math.floor(Math.random() * empty.length)];
+    foodLife = FOODS[kind].life || null;
+}
+
+// ---------------- 键盘 ----------------
+function turn(nd) {
+    if (nd[0] + nextDir[0] !== 0 || nd[1] + nextDir[1] !== 0) {
+        nextDir = nd;
+    }
+}
+
+window.addEventListener("keydown", function (e) {
+    var k = e.key;
+    if (k === "ArrowUp" || k === "ArrowDown" || k === "ArrowLeft" || k === "ArrowRight" || k === " ") {
+        e.preventDefault();
+    }
+    if (gameOver) {
+        if (k === " " || k === "Enter") reset();
+        return;
+    }
+    if (k === "p" || k === "P") { paused = !paused; return; }
+    if (paused) return;
+    if (k === "ArrowUp" || k === "w" || k === "W") turn(UP);
+    else if (k === "ArrowDown" || k === "s" || k === "S") turn(DOWN);
+    else if (k === "ArrowLeft" || k === "a" || k === "A") turn(LEFT);
+    else if (k === "ArrowRight" || k === "d" || k === "D") turn(RIGHT);
+});
+
+canvas.addEventListener("mousedown", function () { canvas.focus(); });
+window.addEventListener("load", function () { canvas.focus(); });
+canvas.focus();
+
+// ---------------- 主循环 ----------------
+var lastTime = performance.now();
+function loop(now) {
+    var dt = (now - lastTime) / 1000;
+    lastTime = now;
+    if (dt > 0.1) dt = 0.1;
+    tick(dt);
+    draw();
+    requestAnimationFrame(loop);
+}
+
+function tick(dt) {
+    time += dt;
+
+    // 粒子
+    var alive = [];
+    for (var i = 0; i < particles.length; i++) {
+        var p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.18;
+        p.vx *= 0.95;
+        p.vy *= 0.95;
+        p.life -= dt;
+        if (p.life > 0) alive.push(p);
+    }
+    particles = alive.length < 400 ? alive : alive.slice(0, 400);
+
+    // 视觉位置平滑
+    updateVis(dt);
+
+    // 屏幕抖动
+    if (shake > 0) shake = Math.max(0, shake - dt * 42);
+    if (bannerT > 0) bannerT = Math.max(0, bannerT - dt);
+
+    if (gameOver || paused) return;
+
+    // 倒计时
+    if (slowT > 0) slowT = Math.max(0, slowT - dt);
+    if (fastT > 0) fastT = Math.max(0, fastT - dt);
+    if (shieldT > 0) shieldT = Math.max(0, shieldT - dt);
+
+    if (foodLife !== null && food !== null) {
+        foodLife -= dt;
+        if (foodLife <= 0) spawnFood();
+    }
+
+    // 蛇头脉冲
+    headPulse = (headPulse + dt * 3.2) % (Math.PI * 2);
+
+    // 移动节奏
+    moveAcc += dt;
+    var interval = stepInterval();
+    var guard = 0;
+    while (moveAcc >= interval && !gameOver) {
+        moveAcc -= interval;
+        step();
+        interval = stepInterval();
+        guard++;
+        if (guard > 4) { moveAcc = 0; break; }
+    }
+}
+
+function updateVis(dt) {
+    var n = snake.length;
+    while (visSnake.length < n) {
+        if (visSnake.length) visSnake.push([visSnake[visSnake.length - 1][0], visSnake[visSnake.length - 1][1]]);
+        else visSnake.push([snake[0][0], snake[0][1]]);
+    }
+    if (visSnake.length > n) visSnake.length = n;
+    var s = Math.min(1, dt * 26);
+    for (var i = 0; i < n; i++) {
+        visSnake[i][0] += (snake[i][0] - visSnake[i][0]) * s;
+        visSnake[i][1] += (snake[i][1] - visSnake[i][1]) * s;
+    }
+}
+
+function stepInterval() {
+    if (fastT > 0) return FAST_STEP;
+    if (slowT > 0) return SLOW_STEP;
+    var base = BASE_STEP - Math.min(0.05, score * 0.0007);
+    return Math.max(MIN_STEP, base);
+}
+
+// ---------------- 单步 ----------------
+function step() {
+    direction = nextDir;
+    var hx = snake[0][0], hy = snake[0][1];
+    var nx = hx + direction[0], ny = hy + direction[1];
+    var shielded = shieldT > 0;
+
+    if (!(nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS)) {
+        if (shielded) {
+            nx = ((nx % COLS) + COLS) % COLS;
+            ny = ((ny % ROWS) + ROWS) % ROWS;
+            burst(hx, hy, "#2dd4bf", 12);
+        } else {
+            die("撞到墙壁了");
+            return;
+        }
+    }
+
+    if (walls[key(nx, ny)]) {
+        if (shielded) {
+            delete walls[key(nx, ny)];
+            burst(nx, ny, WALL_HI, 16, 4.5);
+            shake = 7;
+            banner = "破墙 +5"; bannerT = 0.9;
+            score += 5;
+        } else {
+            die("撞到障碍物了");
+            return;
+        }
+    }
+
+    // 自咬检测（尾巴除外）
+    if (!shielded) {
+        for (var i = 0; i < snake.length - 1; i++) {
+            if (snake[i][0] === nx && snake[i][1] === ny) {
+                die("咬到自己了");
+                return;
+            }
+        }
+    }
+
+    snake.unshift([nx, ny]);
+    visSnake.unshift([hx, hy]);
+
+    if (food !== null && nx === food[0] && ny === food[1]) {
+        growPending += FOODS[foodType].grow;
+        onEat();
+        spawnFood();
+    }
+
+    if (growPending > 0) {
+        growPending--;
+    } else {
+        snake.pop();
+        if (visSnake.length > snake.length) visSnake.pop();
+    }
+}
+
+// ---------------- 吃 ----------------
+function onEat() {
+    var info = FOODS[foodType];
+    var gained = info.score;
+    if (fastT > 0) gained *= 2;
+    score += gained;
+
+    burst(food[0], food[1], info.color, 22);
+    burst(food[0], food[1], info.hi, 8, 2.5);
+
+    if (foodType === "slow") {
+        slowT = 5.0; fastT = 0;
+        banner = "缓速 5 秒"; bannerT = 1.2;
+    } else if (foodType === "fast") {
+        fastT = 5.0; slowT = 0;
+        banner = "狂暴 · 双倍得分"; bannerT = 1.2;
+    } else if (foodType === "shield") {
+        shieldT = 6.0;
+        banner = "护盾 6 秒"; bannerT = 1.2;
+    } else if (foodType === "gold") {
+        banner = "金苹果 +" + gained; bannerT = 1.0;
+        shake = 5;
+    } else {
+        banner = "+" + gained; bannerT = 0.5;
+    }
+
+    if (Math.floor(score / 50) > wallsMilestone) {
+        wallsMilestone = Math.floor(score / 50);
+        addWall(); addWall();
+        banner = "障碍增加！"; bannerT = 1.2;
+    }
+
+    if (score > highScore) {
+        highScore = score;
+        saveHS();
+    }
+}
+
+function die(cause) {
+    gameOver = true;
+    deathCause = cause;
+    burst(snake[0][0], snake[0][1], "#ff4757", 55, 7.5, [0.5, 1.4]);
+    burst(snake[0][0], snake[0][1], "#ffb0b8", 20, 4.5);
+    shake = 18;
+    if (score > highScore) {
+        highScore = score;
+        saveHS();
+    }
+}
+
+function burst(gx, gy, color, n, spread, lifeRange) {
+    spread = spread || 3.5;
+    lifeRange = lifeRange || [0.35, 0.95];
+    var px = gx * CELL + CELL / 2;
+    var py = HUD_H + gy * CELL + CELL / 2;
+    for (var i = 0; i < n; i++) {
+        var a = Math.random() * Math.PI * 2;
+        var s = 0.4 + Math.random() * (spread - 0.4);
+        var life = lifeRange[0] + Math.random() * (lifeRange[1] - lifeRange[0]);
+        particles.push({
+            x: px, y: py,
+            vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+            life: life, maxLife: life,
+            color: color,
+            size: 1.8 + Math.random() * (4.5 - 1.8)
+        });
+    }
+}
+
+// ==================== 渲染 ====================
+function draw() {
+    var ox = 0, oy = 0;
+    if (shake > 0.1) {
+        ox = (Math.random() * 2 - 1) * shake * 0.35;
+        oy = (Math.random() * 2 - 1) * shake * 0.35;
+    }
+
+    // 背景
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+    // 网格
+    ctx.strokeStyle = GRID;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (var x = 0; x <= COLS; x++) {
+        ctx.moveTo(x * CELL + ox, HUD_H);
+        ctx.lineTo(x * CELL + ox, HEIGHT);
+    }
+    for (var y = 0; y <= ROWS; y++) {
+        ctx.moveTo(0, HUD_H + y * CELL + oy);
+        ctx.lineTo(WIDTH, HUD_H + y * CELL + oy);
+    }
+    ctx.stroke();
+
+    drawWalls(ox, oy);
+    drawFood(ox, oy);
+    drawSnake(ox, oy);
+    drawParticles(ox, oy);
+    drawHUD();
+    drawOverlay();
+}
+
+// ---------------- 障碍物 ----------------
+function drawWalls(ox, oy) {
+    for (var k in walls) {
+        var w = walls[k];
+        var px = w[0] * CELL + ox;
+        var py = HUD_H + w[1] * CELL + oy;
+        ctx.fillStyle = SHADOW;
+        ctx.fillRect(px + 3, py + 4, CELL - 4, CELL - 3);
+        ctx.fillStyle = WALL_C;
+        ctx.strokeStyle = WALL_E;
+        ctx.lineWidth = 1;
+        ctx.fillRect(px + 2, py + 2, CELL - 4, CELL - 4);
+        ctx.strokeRect(px + 2, py + 2, CELL - 4, CELL - 4);
+        ctx.strokeStyle = WALL_HI;
+        ctx.beginPath();
+        ctx.moveTo(px + 4, py + 3);
+        ctx.lineTo(px + CELL - 4, py + 3);
+        ctx.stroke();
+    }
+}
+
+// ---------------- 食物 ----------------
+function drawFood(ox, oy) {
+    if (food === null) return;
+    var info = FOODS[foodType];
+    var col = info.color, hi = info.hi;
+
+    var cx = food[0] * CELL + CELL / 2 + ox;
+    var cy = HUD_H + food[1] * CELL + CELL / 2 + oy;
+
+    var pulse = 0.5 + 0.5 * Math.sin(time * 5.5);
+    var r = CELL * 0.26 * (0.9 + 0.2 * pulse);
+
+    // 多层光晕
+    var alphas = [0.06, 0.10, 0.16];
+    for (var i = 0; i < 3; i++) {
+        var gr = r + (3 - i) * 5.0;
+        ctx.fillStyle = blend(col, BG, alphas[i]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, gr, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 本体
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 高光
+    var hlR = r * 0.40;
+    ctx.fillStyle = blend("#ffffff", hi, 0.55);
+    ctx.beginPath();
+    ctx.arc(cx - r * 0.30, cy - r * 0.36, hlR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 倒计时弧
+    if (foodLife !== null && info.life) {
+        var frac = Math.max(0, foodLife / info.life);
+        if (frac > 0.02) {
+            var ext = r + 7.5;
+            ctx.strokeStyle = col;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(cx, cy, ext, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac * 0.9997, false);
+            ctx.stroke();
+        }
+    }
+}
+
+// ---------------- 蛇 ----------------
+function drawSnake(ox, oy) {
+    var n = visSnake.length;
+    if (n === 0) return;
+
+    var nodes = [];
+    for (var i = 0; i < n; i++) {
+        var cx = visSnake[i][0] * CELL + CELL / 2 + ox;
+        var cy = HUD_H + visSnake[i][1] * CELL + CELL / 2 + oy;
+        var t = i / Math.max(1, n - 1);
+        var r = CELL * 0.53 * (1.0 - 0.32 * t);
+        nodes.push([cx, cy, r, t]);
+    }
+
+    // 外发光（描边）
+    ctx.fillStyle = SHADOW;
+    for (i = 0; i < n; i++) {
+        ctx.beginPath();
+        ctx.arc(nodes[i][0], nodes[i][1], nodes[i][2] + 2.4, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 身体渐变
+    for (i = 0; i < n; i++) {
+        var col = (i === 0) ? HEAD_C : lerpColor(BODY_TOP, BODY_END, Math.pow(nodes[i][3], 1.15));
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.arc(nodes[i][0], nodes[i][1], nodes[i][2], 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 护盾
+    if (shieldT > 0) {
+        var hx = nodes[0][0], hy = nodes[0][1], hr = nodes[0][2];
+        var gr = hr + 6 + Math.sin(time * 9) * 2;
+        ctx.strokeStyle = "#2dd4bf";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(hx, hy, gr, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = blend("#2dd4bf", BG, 0.35);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(hx, hy, gr + 3, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+
+    // 蛇头细节
+    hx = nodes[0][0]; hy = nodes[0][1]; hr = nodes[0][2];
+    var dx = direction[0], dy = direction[1];
+    var pxv = -dy, pyv = dx;
+
+    // 眼睛
+    var eyeFwd = hr * 0.34;
+    var eyeSide = hr * 0.42;
+    var eyeR = hr * 0.27;
+    for (var sgn = 1; sgn >= -1; sgn -= 2) {
+        var ex = hx + dx * eyeFwd + pxv * eyeSide * sgn;
+        var ey = hy + dy * eyeFwd + pyv * eyeSide * sgn;
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(ex, ey, eyeR, 0, Math.PI * 2);
+        ctx.fill();
+        var pr = eyeR * 0.58;
+        var ppx = ex + dx * eyeR * 0.24;
+        var ppy = ey + dy * eyeR * 0.24;
+        ctx.fillStyle = "#06121a";
+        ctx.beginPath();
+        ctx.arc(ppx, ppy, pr, 0, Math.PI * 2);
+        ctx.fill();
+        var glR = pr * 0.42;
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(ppx - pr * 0.55, ppy - pr * 0.55, glR, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 舌头（脉冲）
+    var tongue = Math.sin(headPulse * 2) * 0.5 + 0.5;
+    if (tongue > 0.7) {
+        var tl = hr * 0.55 * (tongue - 0.7) / 0.3;
+        ctx.strokeStyle = "#ff5f7a";
+        ctx.lineWidth = 2;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(hx + dx * hr, hy + dy * hr);
+        ctx.lineTo(hx + dx * (hr + tl), hy + dy * (hr + tl));
+        ctx.stroke();
+    }
+}
+
+// ---------------- 粒子 ----------------
+function drawParticles(ox, oy) {
+    for (var i = 0; i < particles.length; i++) {
+        var p = particles[i];
+        var a = p.life / p.maxLife;
+        var r = p.size * a;
+        if (r < 0.35) continue;
+        ctx.fillStyle = blend(p.color, BG, Math.min(1, a * 1.2));
+        ctx.beginPath();
+        ctx.arc(p.x + ox, p.y + oy, r, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+// ---------------- HUD ----------------
+function roundRectPath(x1, y1, x2, y2, r) {
+    ctx.beginPath();
+    ctx.moveTo(x1 + r, y1);
+    ctx.arcTo(x2, y1, x2, y2, r);
+    ctx.arcTo(x2, y2, x1, y2, r);
+    ctx.arcTo(x1, y2, x1, y1, r);
+    ctx.arcTo(x1, y1, x2, y1, r);
+    ctx.closePath();
+}
+
+function drawHUD() {
+    ctx.fillStyle = HUD_BG;
+    ctx.fillRect(0, 0, WIDTH, HUD_H);
+    ctx.strokeStyle = BORDER;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, HUD_H + 0.5);
+    ctx.lineTo(WIDTH, HUD_H + 0.5);
+    ctx.stroke();
+
+    // 左侧：得分
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = DIM;
+    ctx.font = "12px " + FONT_CJK;
+    ctx.fillText("得分", 18, 10);
+    ctx.fillStyle = TEXT;
+    ctx.font = "bold 26px " + FONT_MONO;
+    ctx.fillText(String(score), 18, 24);
+
+    // 中间：最高分
+    ctx.textAlign = "center";
+    ctx.fillStyle = DIM;
+    ctx.font = "12px " + FONT_CJK;
+    ctx.fillText("最高分", WIDTH / 2, 10);
+    ctx.fillStyle = GOLD;
+    ctx.font = "bold 26px " + FONT_MONO;
+    ctx.fillText(String(highScore), WIDTH / 2, 24);
+
+    // 右侧：状态条
+    var items = [];
+    if (shieldT > 0) items.push(["护盾", shieldT / 6.0, "#2dd4bf"]);
+    if (fastT > 0) items.push(["狂暴", fastT / 5.0, "#a78bfa"]);
+    if (slowT > 0) items.push(["缓速", slowT / 5.0, "#38bdf8"]);
+
+    var bx = WIDTH - 16;
+    for (var i = items.length - 1; i >= 0; i--) {
+        var w = 64;
+        ctx.fillStyle = "#141d31";
+        roundRectPath(bx - w, 14, bx, 24, 4);
+        ctx.fill();
+        var pw = Math.max(2, w * items[i][1]);
+        ctx.fillStyle = items[i][2];
+        roundRectPath(bx - w, 14, bx - w + pw, 24, 4);
+        ctx.fill();
+        ctx.textAlign = "center";
+        ctx.font = "12px " + FONT_CJK;
+        ctx.fillText(items[i][0], bx - w / 2, 34);
+        bx -= w + 10;
+    }
+
+    // 中央横幅提示
+    if (bannerT > 0 && !gameOver) {
+        var a = Math.min(1, bannerT / 0.4);
+        ctx.fillStyle = blend(GOLD, BG, a);
+        ctx.textAlign = "center";
+        ctx.font = "bold 24px " + FONT_CJK;
+        ctx.fillText(banner, WIDTH / 2, HUD_H + 24);
+    }
+
+    // 署名
+    ctx.textAlign = "right";
+    ctx.fillStyle = blend(DIM, BG, 0.7);
+    ctx.font = "10px " + FONT_CJK;
+    ctx.fillText("by 李浩然", WIDTH - 8, HEIGHT - 18);
+}
+
+// ---------------- 覆盖层 ----------------
+function drawOverlay() {
+    if (!(paused || gameOver)) return;
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+    ctx.fillRect(0, HUD_H, WIDTH, HEIGHT - HUD_H);
+
+    ctx.textAlign = "center";
+
+    if (paused) {
+        ctx.fillStyle = HEAD_C;
+        ctx.font = "bold 52px " + FONT_CJK;
+        ctx.fillText("已暂停", WIDTH / 2, HEIGHT / 2 - 44);
+        ctx.fillStyle = DIM;
+        ctx.font = "17px " + FONT_CJK;
+        ctx.fillText("按 P 继续游戏", WIDTH / 2, HEIGHT / 2 + 24);
+        return;
+    }
+
+    var cy0 = HEIGHT / 2 - 90;
+    ctx.fillStyle = "#ff4757";
+    ctx.font = "bold 52px " + FONT_CJK;
+    ctx.fillText("游戏结束", WIDTH / 2, cy0);
+    ctx.fillStyle = DIM;
+    ctx.font = "18px " + FONT_CJK;
+    ctx.fillText(deathCause, WIDTH / 2, cy0 + 46);
+
+    ctx.fillStyle = DIM;
+    ctx.font = "12px " + FONT_CJK;
+    ctx.fillText("本局得分", WIDTH / 2, cy0 + 88);
+    ctx.fillStyle = TEXT;
+    ctx.font = "bold 24px " + FONT_CJK;
+    ctx.fillText(String(score), WIDTH / 2, cy0 + 106);
+
+    ctx.fillStyle = GOLD;
+    ctx.font = "17px " + FONT_CJK;
+    ctx.fillText("历史最高  " + highScore, WIDTH / 2, cy0 + 148);
+
+    ctx.fillStyle = DIM;
+    ctx.font = "14px " + FONT_CJK;
+    ctx.fillText("按 空格 重新开始", WIDTH / 2, cy0 + 196);
+}
+
+// ==================== 启动 ====================
+highScore = loadHS();
+reset();
+requestAnimationFrame(function (now) {
+    lastTime = now;
+    requestAnimationFrame(loop);
+});
+
+})();
+</script>
+</body>
+</html>

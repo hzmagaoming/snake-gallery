@@ -1,0 +1,39 @@
+{
+  "lectures": [
+    {
+      "id": 1,
+      "title": "第一讲 · 贪吃蛇",
+      "active": true,
+      "games": [
+        { "id": "l1-zengmin", "author": "曾敏", "title": "贪吃蛇 · 甜蜜花园", "tags": ["多关卡制", "螺旋迷宫", "毒物即死", "曲线移动"], "path": "games/lecture1/zengmin/" },
+        { "id": "l1-chenruiyang", "author": "陈睿旸", "title": "青蛇果园", "tags": ["白色果园风", "三档难度", "成长等级", "蛇皮贴图"], "path": "games/lecture1/chenruiyang/" },
+        { "id": "l1-chenyixuan", "author": "陈一萱", "title": "卡通贪吃蛇", "tags": ["玻璃质感UI", "昵称排行榜", "18级变速", "岩石障碍"], "path": "games/lecture1/chenyixuan/" },
+        { "id": "l1-fanxinyu", "author": "范馨予", "title": "萌萌蛇大冒险", "tags": ["六款皮肤", "NPC小蛇", "身体截杀", "合成BGM"], "path": "games/lecture1/fanxinyu/" },
+        { "id": "l1-jiangwanting", "author": "蒋琬婷", "title": "糖果虫虫 · 十关风景追逐", "tags": ["追踪AI", "十关风景", "生命系统", "连吃冻结"], "path": "games/lecture1/jiangwanting/" },
+        { "id": "l1-jiangwenjie", "author": "蒋文杰", "title": "Serpent Run", "tags": ["霓虹街机", "Combo连击", "限时金食物", "粒子飘字"], "path": "games/lecture1/jiangwenjie/" },
+        { "id": "l1-leianqi", "author": "雷安琪", "title": "贪吃蛇 · 金苹果与道具", "tags": ["限时金苹果", "随机道具", "三档速度"], "path": "games/lecture1/leianqi/" },
+        { "id": "l1-lihaoran", "author": "李浩然", "title": "霓虹贪吃蛇", "tags": ["五种食物", "护盾破墙", "屏幕抖动", "粒子特效"], "path": "games/lecture1/lihaoran/" },
+        { "id": "l1-lvcheng", "author": "吕程", "title": "贪吃蛇 · 奇趣版", "tags": ["四色食物", "连击倍率", "随机传送门", "穿墙模式"], "path": "games/lecture1/lvcheng/" },
+        { "id": "l1-majunbo", "author": "马俊博", "title": "贪吃蛇", "tags": ["渐变蛇身", "吐信动画", "拟真苹果"], "path": "games/lecture1/majunbo/" },
+        { "id": "l1-panyiqi", "author": "潘祎琦", "title": "贪吃蛇 · Snake", "tags": ["霓虹渐变", "转向队列", "越吃越快"], "path": "games/lecture1/panyiqi/" },
+        { "id": "l1-songxinyu", "author": "宋欣雨", "title": "贪吃蛇 · 莫兰迪小吃街", "tags": ["莫兰迪配色", "障碍簇", "画面缩放"], "path": "games/lecture1/songxinyu/" },
+        { "id": "l1-tangruixue", "author": "唐瑞雪", "title": "可爱贪吃蛇 · 豪华版", "tags": ["动态石头", "多水果并存", "腮红蛇头"], "path": "games/lecture1/tangruixue/" },
+        { "id": "l1-wutongyu", "author": "吴桐雨", "title": "EMERGENCY RUN 应急行动", "tags": ["应急救援", "三情景", "灾情升级", "风险扫描"], "path": "games/lecture1/wutongyu/" },
+        { "id": "l1-wuziqian", "author": "吴子谦", "title": "终端贪吃蛇", "tags": ["终端字符风", "CRT扫描线", "复古质感"], "path": "games/lecture1/wuziqian/" },
+        { "id": "l1-yangxingqiang", "author": "杨兴强", "title": "幻彩青蛇", "tags": ["六色豆", "连击狂热", "传送门", "缎带蛇身"], "path": "games/lecture1/yangxingqiang/" },
+        { "id": "l1-yangzhenyu", "author": "杨震宇", "title": "八方向贪吃蛇", "tags": ["八方向移动", "毒苹果", "地图自选", "穿墙可选"], "path": "games/lecture1/yangzhenyu/" },
+        { "id": "l1-yejiayu", "author": "叶佳瑜", "title": "花园贪吃蛇", "tags": ["Emoji素材", "三档难度", "小草障碍"], "path": "games/lecture1/yejiayu/" },
+        { "id": "l1-zhangxunyin", "author": "张熏尹", "title": "像素猫贪吃蛇", "tags": ["像素风", "HTML原生", "石头障碍"], "path": "games/lecture1/zhangxunyin/" },
+        { "id": "l1-zhaofangxuan", "author": "赵芳萱", "title": "贪吃蛇 · 主题版", "tags": ["连续物理", "鼠标跟随", "四主题切换", "星座连线"], "path": "games/lecture1/zhaofangxuan/" },
+        { "id": "l1-yaobaoyan", "author": "姚宝妍", "title": "作业提交中", "placeholder": true }
+      ]
+    },
+    { "id": 2, "title": "第二讲", "active": false, "games": [] },
+    { "id": 3, "title": "第三讲", "active": false, "games": [] },
+    { "id": 4, "title": "第四讲", "active": false, "games": [] },
+    { "id": 5, "title": "第五讲", "active": false, "games": [] },
+    { "id": 6, "title": "第六讲", "active": false, "games": [] },
+    { "id": 7, "title": "第七讲", "active": false, "games": [] },
+    { "id": 8, "title": "第八讲", "active": false, "games": [] }
+  ]
+}

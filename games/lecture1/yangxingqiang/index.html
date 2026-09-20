@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>幻彩青蛇 · Anaconda Python 课堂练习</title>
+<style>
+    html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #08141d;
+        overflow: hidden;
+        font-family: Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    #viewport {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform-origin: center center;
+    }
+    #stage {
+        width: 620px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        background: #08141d;
+        color: #d7eff4;
+        user-select: none;
+    }
+    #status {
+        font-size: 16px;
+        padding: 12px 0;
+        color: #d7eff4;
+        white-space: nowrap;
+    }
+    #notice {
+        font-size: 12px;
+        padding: 7px 0;
+        color: #99e8ff;
+        min-height: 15px;
+        text-align: center;
+        max-width: 580px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    canvas {
+        display: block;
+        background: #07151d;
+        outline: none;
+    }
+    #legend {
+        padding: 5px 0 0 0;
+        color: #c5dce3;
+        font-size: 14px;
+    }
+    #rules-btn {
+        margin: 8px 0 4px 0;
+        padding: 4px 14px;
+        background: #12303c;
+        color: #d7eff4;
+        border: 1px solid #2a5a6b;
+        border-radius: 4px;
+        font-size: 13px;
+        cursor: pointer;
+        font-family: inherit;
+    }
+    #rules-btn:hover { background: #1a4353; }
+    #hint {
+        padding: 4px 0 12px 0;
+        color: #d7eff4;
+        font-size: 13px;
+    }
+    #rules-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(4, 12, 18, 0.82);
+        z-index: 10;
+        align-items: center;
+        justify-content: center;
+    }
+    #rules-box {
+        background: #0d2230;
+        border: 1px solid #2a5a6b;
+        border-radius: 10px;
+        padding: 22px 26px;
+        max-width: 560px;
+        max-height: 82vh;
+        overflow-y: auto;
+        color: #d7eff4;
+    }
+    #rules-box h2 {
+        margin: 0 0 12px 0;
+        font-size: 18px;
+        color: #99e8ff;
+    }
+    #rules-box pre {
+        white-space: pre-wrap;
+        font-family: inherit;
+        font-size: 13px;
+        line-height: 1.65;
+        margin: 0 0 14px 0;
+    }
+    #rules-close {
+        padding: 5px 18px;
+        background: #1a4353;
+        color: #d7eff4;
+        border: 1px solid #2a5a6b;
+        border-radius: 4px;
+        cursor: pointer;
+        font-family: inherit;
+    }
+</style>
+</head>
+<body>
+<div id="viewport">
+    <div id="stage">
+        <div id="status"></div>
+        <div id="notice"></div>
+        <canvas id="game" width="600" height="480" tabindex="0"></canvas>
+        <div id="legend">红 +1 &nbsp;&nbsp; 蓝 减速 &nbsp;&nbsp; 黄 +2 &nbsp;&nbsp; 紫 补盾 &nbsp;&nbsp; 粉 狂热 &nbsp;&nbsp; 黑 缩身</div>
+        <button id="rules-btn">玩法规则（H）</button>
+        <div id="hint">方向键/WASD移动 &nbsp;·&nbsp; 空格暂停 &nbsp;·&nbsp; R重开 &nbsp;·&nbsp; 彩虹豆触发狂热</div>
+    </div>
+</div>
+<div id="rules-overlay">
+    <div id="rules-box">
+        <h2>幻彩青蛇 · 玩法规则</h2>
+        <pre id="rules-text"></pre>
+        <button id="rules-close">关闭（H / Esc）</button>
+    </div>
+</div>
+
+<script>
+(function () {
+"use strict";
+
+var CELL = 24;
+var COLS = 25, ROWS = 20;
+var DELAY = 130;
+var TAU = Math.PI * 2;
+
+var canvas = document.getElementById("game");
+var ctx = canvas.getContext("2d");
+var statusEl = document.getElementById("status");
+var noticeEl = document.getElementById("notice");
+
+var PALETTES = [
+    {name: "翡翠脉冲", dark: "#174a36", body: "#37d67a", light: "#adffb6", glow: "#54ff9f"},
+    {name: "赛博蓝", dark: "#17495e", body: "#20bde5", light: "#a7f2ff", glow: "#2fe8ff"},
+    {name: "电光紫", dark: "#4a286f", body: "#9a55e9", light: "#e2c5ff", glow: "#c16cff"},
+    {name: "熔岩橙", dark: "#71391f", body: "#ef7840", light: "#ffd3a1", glow: "#ff9a45"},
+    {name: "樱花粉", dark: "#702a54", body: "#e952a1", light: "#ffc1e4", glow: "#ff65bd"},
+    {name: "黄金风暴", dark: "#715514", body: "#e7b72e", light: "#fff0a3", glow: "#ffd84a"}
+];
+
+var FOOD_ORDER = ["normal", "slow", "double", "shield", "rainbow", "shrink"];
+var FOOD_WEIGHTS = [42, 12, 12, 11, 10, 13];
+var FOODS = {
+    normal:  {name: "能量", color: "#ff4571", outline: "#ffafc1", symbol: "✦"},
+    slow:    {name: "冰冻", color: "#3cbcf4", outline: "#bcecff", symbol: "❄"},
+    double:  {name: "双倍", color: "#ffc83d", outline: "#fff0a3", symbol: "×2"},
+    shield:  {name: "护盾", color: "#8d6cff", outline: "#dccfff", symbol: "◇"},
+    rainbow: {name: "狂热", color: "#ff54d9", outline: "#ffffff", symbol: "★"},
+    shrink:  {name: "缩身", color: "#3b4354", outline: "#b8c1d8", symbol: "−"}
+};
+
+var RULES = "目标：吃豆得分并刷新最高分。棋盘内始终有一颗豆，吃完立即刷新。\n\n" +
+"方向键/WASD移动；空格暂停；R重新开始；H查看规则。\n\n" +
+"红豆：+1分，增长一节。\n" +
+"蓝豆：+1分，减速6秒。\n" +
+"黄豆：+2分，可与狂热倍数叠加。\n" +
+"紫豆：+1分，恢复1次撞墙护盾（上限1次）。\n" +
+"粉豆：+1分，激活或续时8秒狂热，至少为1级。\n" +
+"黑豆：+1分，蛇身净缩短3节，最短保留4节。\n" +
+"除黑豆外，每颗豆均增长一节；所有豆都会切换蛇身配色。\n\n" +
+"连击：相邻两次吃豆间隔不超过10秒。\n" +
+"3/6/9连击分别触发1/2/3级狂热，后续得分为2/3/4倍。\n" +
+"狂热持续8秒；达到3连击后继续连吃会刷新持续时间。\n" +
+"狂热不提供无敌，也不会额外加速，方便你追逐连击。\n\n" +
+"蓝紫传送门：进入一个会从另一个出现，方向不变。\n" +
+"出口被身体占用时，本次不传送，可以直接经过入口。\n" +
+"穿越只连接真实蛇身，不会形成横跨地图的碰撞区域。\n\n" +
+"护盾：开局1次，撞墙时消耗并从对面穿出。\n" +
+"护盾仅保护撞墙，撞到身体仍会结束；穿出后也要避开身体。\n" +
+"每5分升1级并略微加速，速度有上限。\n\n" +
+"暂停和查看规则都会冻结连击、狂热、减速计时。\n" +
+"填满除传送门外的空位即可获胜。最高分自动保存到本地。";
+
+document.getElementById("rules-text").textContent = RULES;
+
+var HS_KEY = "sg-l1-yangxingqiang-high-score";
+
+// ---------- 状态 ----------
+var snake, direction, pending, turned, paused, over, won, started;
+var score, food, foodType;
+var paletteIndex, particles, flash, combo, comboTimer;
+var shieldAvailable, shieldTimer, slowTicks, feverTicks, feverLevel;
+var elapsed, saveError, eventTimer, eventMessage, portals, highScore, frame, speed;
+var rulesOpen = false;
+
+var stars = [];
+for (var i = 0; i < 55; i++) {
+    stars.push([Math.floor(Math.random() * COLS * CELL),
+                Math.floor(Math.random() * ROWS * CELL),
+                Math.random() < 0.75 ? 1 : 2,
+                Math.random() * TAU]);
+}
+
+function loadHighScore() {
+    try {
+        var v = parseInt(localStorage.getItem(HS_KEY), 10);
+        return isNaN(v) || v < 0 ? 0 : v;
+    } catch (e) { return 0; }
+}
+
+function saveHighScore() {
+    if (score > highScore) {
+        highScore = score;
+        try {
+            localStorage.setItem(HS_KEY, String(highScore));
+        } catch (e) { saveError = true; }
+    }
+}
+
+function currentPalette() {
+    if (feverTicks) return PALETTES[(frame >> 1) % PALETTES.length];
+    return PALETTES[paletteIndex];
+}
+
+function cellEq(a, b) { return a[0] === b[0] && a[1] === b[1]; }
+function inCells(cell, cells) {
+    for (var i = 0; i < cells.length; i++) if (cellEq(cell, cells[i])) return true;
+    return false;
+}
+
+function reset() {
+    snake = [];
+    for (var i = 0; i < 8; i++) snake.push([11 - i, 10]);
+    direction = [1, 0];
+    pending = [1, 0];
+    turned = false;
+    paused = false;
+    over = false;
+    won = false;
+    started = false;
+    score = 0;
+    paletteIndex = 0;
+    particles = [];
+    flash = 0;
+    combo = 0;
+    comboTimer = 0;
+    shieldAvailable = true;
+    shieldTimer = 0;
+    slowTicks = 0;
+    feverTicks = 0;
+    feverLevel = 0;
+    elapsed = 0;
+    eventTimer = 0;
+    eventMessage = "";
+    speed = 130;
+    generatePortals();
+    spawnFood();
+    draw();
+}
+
+function generatePortals() {
+    var free = [];
+    for (var x = 2; x < COLS - 2; x++)
+        for (var y = 3; y < ROWS - 2; y++)
+            if (!inCells([x, y], snake)) free.push([x, y]);
+    var first = free[Math.floor(Math.random() * free.length)];
+    var distant = free.filter(function (c) {
+        return Math.abs(c[0] - first[0]) + Math.abs(c[1] - first[1]) >= 14;
+    });
+    var pool = distant.length ? distant : free;
+    var second = pool[Math.floor(Math.random() * pool.length)];
+    portals = [first, second];
+}
+
+function pickFoodType() {
+    var total = 0, i;
+    for (i = 0; i < FOOD_WEIGHTS.length; i++) total += FOOD_WEIGHTS[i];
+    var r = Math.random() * total;
+    for (i = 0; i < FOOD_WEIGHTS.length; i++) {
+        r -= FOOD_WEIGHTS[i];
+        if (r < 0) return FOOD_ORDER[i];
+    }
+    return FOOD_ORDER[0];
+}
+
+function spawnFood() {
+    var free = [];
+    for (var x = 0; x < COLS; x++)
+        for (var y = 0; y < ROWS; y++) {
+            var c = [x, y];
+            if (!inCells(c, snake) && !inCells(c, portals)) free.push(c);
+        }
+    food = free.length ? free[Math.floor(Math.random() * free.length)] : null;
+    foodType = pickFoodType();
+    if (food === null) { over = true; won = true; }
+}
+
+function teleport(head) {
+    if (!inCells(head, portals)) return head;
+    var exitCell = cellEq(head, portals[0]) ? portals[1] : portals[0];
+    if (inCells(exitCell, snake.slice(0, -1))) {
+        eventMessage = "出口被蛇身占用 · 本次直接经过入口";
+        eventTimer = 2.5;
+        return head;
+    }
+    var px = (head[0] + 0.5) * CELL, py = (head[1] + 0.5) * CELL;
+    var ex = (exitCell[0] + 0.5) * CELL, ey = (exitCell[1] + 0.5) * CELL;
+    burst(px, py, "#65e7ff", 18);
+    burst(ex, ey, "#d965ff", 18);
+    eventMessage = "虫洞跃迁！";
+    eventTimer = 2.5;
+    return [exitCell[0], exitCell[1]];
+}
+
+function applyFoodPower() {
+    var points = foodType === "double" ? 2 : 1;
+    if (feverTicks) points *= feverLevel + 1;
+    if (foodType === "slow") {
+        slowTicks = 6;
+        eventMessage = "时间冻结 · 蛇速暂时降低";
+    } else if (foodType === "shield") {
+        shieldAvailable = true;
+        eventMessage = "护盾重新充能！";
+    } else if (foodType === "rainbow") {
+        feverTicks = 8;
+        feverLevel = Math.max(1, feverLevel);
+        eventMessage = "狂热 " + feverLevel + " 级 · 后续得分 ×" + (feverLevel + 1);
+    } else if (foodType === "shrink") {
+        // 本步已插入蛇头，因此移除四节实现净缩短三节。
+        var removeCount = Math.min(4, Math.max(0, snake.length - 4));
+        if (removeCount) snake.length -= removeCount;
+        eventMessage = "轻盈术 · 蛇身缩短";
+    } else if (foodType === "double") {
+        eventMessage = "双倍能量 +" + points;
+    } else {
+        eventMessage = "能量吸收 +" + points;
+    }
+    eventTimer = 2.5;
+    return points;
+}
+
+function tick() {
+    frame++;
+    updateEffects();
+    if (started && !paused && !rulesOpen && !over) {
+        if (food === null || inCells(food, snake) || inCells(food, portals)) {
+            spawnFood();
+            if (over) {
+                draw();
+                setTimeout(tick, speed);
+                return;
+            }
+        }
+        direction = pending;
+        turned = false;
+        var x = snake[0][0], y = snake[0][1];
+        var head = [x + direction[0], y + direction[1]];
+        var hitWall = !(head[0] >= 0 && head[0] < COLS && head[1] >= 0 && head[1] < ROWS);
+        var fatalWall = hitWall;
+        if (hitWall && shieldAvailable) {
+            shieldAvailable = false;
+            shieldTimer = 3;
+            fatalWall = false;
+            head = [((head[0] % COLS) + COLS) % COLS, ((head[1] % ROWS) + ROWS) % ROWS];
+            var edgeX = Math.min(Math.max((x + 0.5) * CELL, 4), COLS * CELL - 4);
+            var edgeY = Math.min(Math.max((y + 0.5) * CELL, 4), ROWS * CELL - 4);
+            burst(edgeX, edgeY, "#7de9ff", 45);
+            flash = 9;
+        }
+        if (!fatalWall) head = teleport(head);
+        var eating = food !== null && cellEq(head, food);
+        var body = eating ? snake : snake.slice(0, -1);
+        if (fatalWall || inCells(head, body)) {
+            over = true;
+            burst((x + 0.5) * CELL, (y + 0.5) * CELL, "#ff4d6d", 28);
+            flash = 7;
+        } else {
+            snake.unshift(head);
+            if (eating) {
+                var fx = (food[0] + 0.5) * CELL, fy = (food[1] + 0.5) * CELL;
+                score += applyFoodPower();
+                saveHighScore();
+                combo += 1;
+                comboTimer = 10;
+                if (combo >= 3) {
+                    feverLevel = Math.max(feverLevel, Math.min(3, Math.floor(combo / 3)));
+                    feverTicks = 8;
+                    eventMessage = combo + "连击！狂热" + feverLevel + "级 · ×" + (feverLevel + 1) + "分";
+                    eventTimer = 3;
+                }
+                paletteIndex = (paletteIndex + 1) % PALETTES.length;
+                burst(fx, fy, currentPalette().glow, 34);
+                flash = 5;
+                spawnFood();
+                if (food === null) { over = true; won = true; }
+            } else {
+                snake.pop();
+            }
+        }
+    }
+    draw();
+    setTimeout(tick, started ? speed : 90);
+}
+
+function burst(x, y, color, count) {
+    for (var i = 0; i < count; i++) {
+        var angle = Math.random() * TAU;
+        var velocity = 2.0 + Math.random() * 5.0;
+        particles.push({
+            x: x, y: y,
+            dx: Math.cos(angle) * velocity,
+            dy: Math.sin(angle) * velocity,
+            life: 9 + Math.floor(Math.random() * 10),
+            size: 1.8 + Math.random() * 2.7,
+            color: color
+        });
+    }
+}
+
+function updateEffects() {
+    for (var i = 0; i < particles.length; i++) {
+        var p = particles[i];
+        p.x += p.dx;
+        p.y += p.dy;
+        p.dx *= 0.91;
+        p.dy = p.dy * 0.91 + 0.12;
+        p.life -= 1;
+    }
+    particles = particles.filter(function (p) { return p.life > 0; });
+    flash = Math.max(0, flash - 1);
+    // 游戏时间只随实际游戏步推进，暂停或查看规则不会消耗能力。
+    if (started && !paused && !rulesOpen && !over) {
+        var dt = speed / 1000;
+        elapsed += dt;
+        shieldTimer = Math.max(0, shieldTimer - dt);
+        slowTicks = Math.max(0, slowTicks - dt);
+        feverTicks = Math.max(0, feverTicks - dt);
+        eventTimer = Math.max(0, eventTimer - dt);
+        comboTimer = Math.max(0, comboTimer - dt);
+        if (!comboTimer) combo = 0;
+        if (!feverTicks) feverLevel = 0;
+    }
+    var baseSpeed = Math.max(85, 155 - Math.floor(score / 5) * 7);
+    speed = slowTicks ? baseSpeed + 42 : baseSpeed;
+}
+
+// ---------- 绘制 ----------
+
+function pathPoints(cells) {
+    var points = cells.map(function (c) { return [(c[0] + 0.5) * CELL, (c[1] + 0.5) * CELL]; });
+    var extended = [points[0]].concat(points, [points[points.length - 1]]);
+    var result = [];
+    for (var i = 1; i < extended.length - 2; i++) {
+        var a = extended[i - 1], b = extended[i], c = extended[i + 1], d = extended[i + 2];
+        for (var step = 0; step < 6; step++) {
+            var t = step / 6;
+            var px = 0.5 * (2 * b[0] + (-a[0] + c[0]) * t
+                + (2 * a[0] - 5 * b[0] + 4 * c[0] - d[0]) * t * t
+                + (-a[0] + 3 * b[0] - 3 * c[0] + d[0]) * t * t * t);
+            var py = 0.5 * (2 * b[1] + (-a[1] + c[1]) * t
+                + (2 * a[1] - 5 * b[1] + 4 * c[1] - d[1]) * t * t
+                + (-a[1] + 3 * b[1] - 3 * c[1] + d[1]) * t * t * t);
+            result.push([px, py]);
+        }
+    }
+    result.push(points[points.length - 1]);
+    return result;
+}
+
+function fillPoly(pts, color) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+}
+
+function strokePoly(pts, color, width) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.stroke();
+}
+
+function smoothPoly(pts, fill, outline, width) {
+    // 类似 tkinter 的 smooth 多边形：过各边中点的二次曲线
+    ctx.beginPath();
+    var n = pts.length;
+    var mx = (pts[0][0] + pts[n - 1][0]) / 2, my = (pts[0][1] + pts[n - 1][1]) / 2;
+    ctx.moveTo(mx, my);
+    for (var i = 0; i < n; i++) {
+        var p = pts[i], q = pts[(i + 1) % n];
+        ctx.quadraticCurveTo(p[0], p[1], (p[0] + q[0]) / 2, (p[1] + q[1]) / 2);
+    }
+    ctx.closePath();
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    if (outline) { ctx.strokeStyle = outline; ctx.lineWidth = width || 1; ctx.stroke(); }
+}
+
+// tkinter 的 ARC：start 角度从 3 点钟方向逆时针，extent 逆时针
+function tkArc(x, y, r, startDeg, extentDeg, color, width) {
+    ctx.beginPath();
+    var a0 = -startDeg * Math.PI / 180;
+    var a1 = -(startDeg + extentDeg) * Math.PI / 180;
+    ctx.arc(x, y, r, a0, a1, true);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.stroke();
+}
+
+function drawBackground() {
+    ctx.fillStyle = "#07151d";
+    ctx.fillRect(0, 0, COLS * CELL, ROWS * CELL);
+    for (var i = 0; i < stars.length; i++) {
+        var s = stars[i];
+        var glow = 0.5 + 0.5 * Math.sin(frame * 0.18 + s[3]);
+        var color = glow > 0.55 ? "#327080" : "#193e49";
+        var r = s[2] + (glow > 0.86 ? 1 : 0);
+        ctx.beginPath();
+        ctx.arc(s[0], s[1], r, 0, TAU);
+        ctx.fillStyle = color;
+        ctx.fill();
+    }
+    ctx.strokeStyle = "#102c35";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (var x = 0; x <= COLS * CELL; x += CELL) { ctx.moveTo(x, 0); ctx.lineTo(x, ROWS * CELL); }
+    for (var y = 0; y <= ROWS * CELL; y += CELL) { ctx.moveTo(0, y); ctx.lineTo(COLS * CELL, y); }
+    ctx.stroke();
+}
+
+function drawFood() {
+    if (food === null) return;
+    var x = (food[0] + 0.5) * CELL, y = (food[1] + 0.5) * CELL;
+    var f = FOODS[foodType];
+    var pulse = 2 + 2 * Math.sin(frame * 0.45);
+    var rings = [[17 + pulse, "#153846"], [13 + pulse / 2, f.outline]];
+    for (var i = 0; i < rings.length; i++) {
+        ctx.beginPath();
+        ctx.arc(x, y, rings[i][0], 0, TAU);
+        ctx.strokeStyle = rings[i][1];
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.arc(x, y, 10, 0, TAU);
+    ctx.fillStyle = f.color;
+    ctx.fill();
+    ctx.strokeStyle = f.outline;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(x - 3, y - 4, 2, 2, 0, 0, TAU);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.fillStyle = "#fff9e8";
+    ctx.font = "bold 13px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(f.symbol, x, y + 1);
+}
+
+function drawPortals() {
+    for (var index = 0; index < portals.length; index++) {
+        var x = (portals[index][0] + 0.5) * CELL, y = (portals[index][1] + 0.5) * CELL;
+        var color = index === 0 ? "#4de5ff" : "#d75aff";
+        var reverse = index ? 1 : -1;
+        var rings = [[13, 3], [9, 2], [5, 1]];
+        for (var i = 0; i < rings.length; i++) {
+            var start = ((frame * 16 * reverse + rings[i][0] * 8) % 360 + 360) % 360;
+            tkArc(x, y, rings[i][0], start, 230, color, rings[i][1]);
+        }
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, TAU);
+        ctx.fillStyle = "#eefcff";
+        ctx.fill();
+    }
+}
+
+function drawSnake() {
+    // 穿墙和传送造成坐标跳跃；按连续段分别绘制，避免横贯棋盘的假蛇身。
+    var segments = [];
+    for (var i = 0; i < snake.length; i++) {
+        var cell = snake[i];
+        if (!segments.length) {
+            segments.push([cell]);
+        } else {
+            var last = segments[segments.length - 1];
+            var prev = last[last.length - 1];
+            if (Math.abs(prev[0] - cell[0]) + Math.abs(prev[1] - cell[1]) > 1) {
+                segments.push([cell]);
+            } else {
+                last.push(cell);
+            }
+        }
+    }
+    for (var j = segments.length - 1; j >= 0; j--) {
+        drawSnakeSegment(segments[j], j === 0);
+    }
+}
+
+function drawSnakeSegment(cells, drawHead) {
+    var colors = currentPalette();
+    var points = pathPoints(cells);
+    if (points.length === 1) {
+        var sx = points[0][0], sy = points[0][1];
+        ctx.beginPath();
+        ctx.arc(sx, sy, 8, 0, TAU);
+        ctx.fillStyle = colors.body;
+        ctx.fill();
+        ctx.strokeStyle = colors.glow;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        if (!drawHead) return;
+        points = [[sx, sy], [sx - direction[0], sy - direction[1]]];
+    }
+    var frames = [];
+    for (var i = 0; i < points.length; i++) {
+        var previous = points[Math.max(0, i - 1)];
+        var following = points[Math.min(points.length - 1, i + 1)];
+        var ddx = following[0] - previous[0], ddy = following[1] - previous[1];
+        var length = Math.hypot(ddx, ddy) || 1;
+        var nx = -ddy / length, ny = ddx / length;
+        var fraction = i / Math.max(1, points.length - 1);
+        var radius = 8.7 * Math.min(1, (1 - fraction) * 4 + 0.07);
+        frames.push([points[i][0], points[i][1], nx, ny, radius]);
+    }
+
+    function ribbon(scale, offset) {
+        offset = offset || 0;
+        var pts = [];
+        var i;
+        for (i = 0; i < frames.length; i++) {
+            var f = frames[i];
+            pts.push([f[0] + f[2] * f[4] * scale, f[1] + f[3] * f[4] * scale + offset]);
+        }
+        for (i = frames.length - 1; i >= 0; i--) {
+            var g = frames[i];
+            pts.push([g[0] - g[2] * g[4] * scale, g[1] - g[3] * g[4] * scale + offset]);
+        }
+        return pts;
+    }
+
+    fillPoly(ribbon(1.75), "#0b2631");
+    if (feverTicks) {
+        // 狂热模式下在蛇身后方叠加多色残影。
+        var ghostPalettes = [PALETTES[0], PALETTES[2], PALETTES[4]];
+        var offsets = [5, 3, 1];
+        for (var gi = 0; gi < 3; gi++) {
+            fillPoly(ribbon(1.42, offsets[gi]), ghostPalettes[gi].glow);
+        }
+    }
+    fillPoly(ribbon(1.38), colors.dark);
+    var bodyPts = ribbon(1.08);
+    fillPoly(bodyPts, colors.body);
+    strokePoly(bodyPts, colors.glow, 1);
+    fillPoly(ribbon(0.66), colors.light);
+
+    for (var k = 3; k < frames.length - 2; k += 3) {
+        var fr = frames[k];
+        var fx = fr[0], fy = fr[1], fnx = fr[2], fny = fr[3], fradius = fr[4];
+        var tx = fny, ty = -fnx;
+        var size = Math.min(3.4, fradius * 0.55);
+        var sides = [-0.52, 0.52];
+        for (var si = 0; si < 2; si++) {
+            var side = sides[si];
+            var bx = fx + fnx * fradius * side, by = fy + fny * fradius * side;
+            var diamond = [
+                [bx + tx * 3, by + ty * 3],
+                [bx + fnx * size, by + fny * size],
+                [bx - tx * 3, by - ty * 3],
+                [bx - fnx * size, by - fny * size]
+            ];
+            fillPoly(diamond, colors.dark);
+            strokePoly(diamond, colors.light, 0.5);
+        }
+    }
+
+    if (!drawHead) return;
+    var hx = points[0][0], hy = points[0][1];
+    var dx = direction[0], dy = direction[1];
+    var hnx = -dy, hny = dx;
+
+    function local(a, b) { return [hx + dx * a + hnx * b, hy + dy * a + hny * b]; }
+    function polygon(coords, fill, outline, width, smooth) {
+        var pts = coords.map(function (c) { return local(c[0], c[1]); });
+        if (smooth) smoothPoly(pts, fill, outline, width);
+        else {
+            if (fill) fillPoly(pts, fill);
+            if (outline) strokePoly(pts, outline, width || 1);
+        }
+    }
+    function dot(a, b, radius, fill) {
+        var p = local(a, b);
+        ctx.beginPath();
+        ctx.arc(p[0], p[1], radius, 0, TAU);
+        ctx.fillStyle = fill;
+        ctx.fill();
+    }
+
+    // 尚未使用的护盾会在蛇头周围形成旋转感的双层能量环。
+    if (shieldAvailable) {
+        var pulse = 1.5 + Math.sin(frame * 0.35);
+        ctx.beginPath();
+        ctx.arc(hx, hy, 16 + pulse, 0, TAU);
+        ctx.strokeStyle = "#6ee7ff";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        tkArc(hx, hy, 20, ((frame * 18) % 360 + 360) % 360, 115, "#d4f8ff", 2);
+    }
+
+    if (!over) {
+        var tongue = "#ff497d";
+        ctx.strokeStyle = tongue;
+        ctx.lineWidth = 2;
+        var t1 = local(10, 0), t2 = local(20, 0);
+        ctx.beginPath();
+        ctx.moveTo(t1[0], t1[1]); ctx.lineTo(t2[0], t2[1]);
+        var f1 = local(24, -3), f2 = local(24, 3);
+        ctx.moveTo(t2[0], t2[1]); ctx.lineTo(f1[0], f1[1]);
+        ctx.moveTo(t2[0], t2[1]); ctx.lineTo(f2[0], f2[1]);
+        ctx.stroke();
+    }
+    var head = [[-11,-6],[-6,-10],[2,-10],[10,-6],[12,-2],[12,2],[10,6],[2,10],[-6,10],[-11,6]];
+    polygon(head, colors.body, colors.glow, 2, true);
+    polygon([[-9,-2],[-3,-6],[8,-3],[10,0],[8,3],[-3,6],[-9,2]], colors.light, null, 0, true);
+    var eyeSides = [-1, 1];
+    for (var ei = 0; ei < 2; ei++) {
+        var es = eyeSides[ei];
+        dot(3, es * 7, 3.4, "#07151d");
+        dot(3.6, es * 7, 2.4, "#ffe66d");
+        var e1 = local(2, es * 7), e2 = local(5, es * 7);
+        ctx.beginPath();
+        ctx.moveTo(e1[0], e1[1]); ctx.lineTo(e2[0], e2[1]);
+        ctx.strokeStyle = "#07151d";
+        ctx.lineWidth = 1.8;
+        ctx.stroke();
+        dot(3.4, es * 7 - 0.7, 0.7, "white");
+    }
+}
+
+function drawParticles() {
+    for (var i = 0; i < particles.length; i++) {
+        var p = particles[i];
+        var radius = p.size * Math.min(1, p.life / 5);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius, 0, TAU);
+        ctx.fillStyle = p.color;
+        ctx.fill();
+    }
+}
+
+function pad2(n) { return (n < 10 ? "0" : "") + n; }
+
+function draw() {
+    drawBackground();
+    drawPortals();
+    drawSnake();
+    drawParticles();
+    drawFood();
+    if (flash) {
+        ctx.strokeStyle = currentPalette().glow;
+        ctx.lineWidth = flash;
+        ctx.strokeRect(0, 0, COLS * CELL, ROWS * CELL);
+    }
+
+    // 画面角落署名
+    ctx.fillStyle = "rgba(153, 232, 255, 0.45)";
+    ctx.font = "10px Arial";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "bottom";
+    ctx.fillText("by 杨兴强", COLS * CELL - 6, ROWS * CELL - 4);
+
+    var message = "按方向键开始 · 吃豆变色";
+    if (started) message = "追逐能量豆 · 空格暂停 · R 重开";
+    if (paused) message = "时空冻结 · 按空格继续";
+    if (over) {
+        message = won ? "满屏制霸 · R 再战" : "撞击警报 · 按 R 重启";
+    } else if (shieldTimer) {
+        message = "能量护盾启动！已从对面边界穿出";
+    } else if (eventTimer) {
+        message = eventMessage;
+    } else if (feverTicks) {
+        message = "狂热" + feverLevel + "级 · ×" + (feverLevel + 1) + "分 · 剩余" + feverTicks.toFixed(1) + "秒";
+    }
+    if (paused && !over) message = "已暂停 · 能力时间冻结 · 空格继续";
+    if (rulesOpen && !over) message = "查看规则中 · 能力时间冻结";
+    if (comboTimer && combo) message += "  |  " + combo + "连击 · " + comboTimer.toFixed(1) + "秒内再吃一颗";
+    if (slowTicks) message += "  |  减速" + slowTicks.toFixed(1) + "秒";
+    if (saveError) message += " | 最高分仅保存在本次运行中";
+    noticeEl.textContent = message;
+
+    var level = 1 + Math.floor(score / 5);
+    var shield = shieldAvailable ? "护盾 1" : "护盾 0";
+    var target = food ? "目标：" + FOODS[foodType].name + "豆" : "满盘通关";
+    statusEl.textContent = "得分 " + pad2(score) + "  最高 " + pad2(highScore) +
+        "  LV." + level + "  " + shield + "  " + target;
+}
+
+// ---------- 输入 ----------
+
+var DIRECTIONS = {
+    arrowup: [0, -1], w: [0, -1],
+    arrowdown: [0, 1], s: [0, 1],
+    arrowleft: [-1, 0], a: [-1, 0],
+    arrowright: [1, 0], d: [1, 0]
+};
+
+var rulesOverlay = document.getElementById("rules-overlay");
+
+function showRules() {
+    if (rulesOpen) return;
+    rulesOpen = true;
+    rulesOverlay.style.display = "flex";
+    draw();
+}
+
+function hideRules() {
+    if (!rulesOpen) return;
+    rulesOpen = false;
+    rulesOverlay.style.display = "none";
+    canvas.focus();
+    draw();
+}
+
+document.getElementById("rules-btn").addEventListener("click", function () {
+    showRules();
+});
+document.getElementById("rules-close").addEventListener("click", function () {
+    hideRules();
+});
+rulesOverlay.addEventListener("click", function (e) {
+    if (e.target === rulesOverlay) hideRules();
+});
+
+function onKey(e) {
+    var key = e.key.toLowerCase();
+    if (key === " " || key === "spacebar") key = "space";
+    if (key.indexOf("arrow") === 0 || key === "space") e.preventDefault();
+
+    if (key === "h") {
+        if (rulesOpen) hideRules(); else showRules();
+        return;
+    }
+    if (key === "escape" && rulesOpen) { hideRules(); return; }
+    if (rulesOpen) return;
+
+    if (key === "r") {
+        reset();
+    } else if (key === "space" && !over) {
+        paused = !paused;
+        draw();
+    } else if (DIRECTIONS[key] && !over && !paused) {
+        var nd = DIRECTIONS[key];
+        var reverse = [-direction[0], -direction[1]];
+        if (!(nd[0] === reverse[0] && nd[1] === reverse[1]) && !turned) {
+            pending = nd;
+            turned = true;
+            started = true;
+        }
+    }
+}
+
+window.addEventListener("keydown", onKey);
+canvas.addEventListener("mousedown", function () { canvas.focus(); });
+
+// ---------- 自适应缩放 ----------
+
+var viewport = document.getElementById("viewport");
+function resize() {
+    var w = 620, h = 700;
+    var s = Math.min(window.innerWidth / w, window.innerHeight / h, 1.6);
+    viewport.style.transform = "translate(-50%, -50%) scale(" + s + ")";
+}
+window.addEventListener("resize", resize);
+
+// ---------- 启动 ----------
+
+highScore = loadHighScore();
+saveError = false;
+resize();
+reset();
+canvas.focus();
+setTimeout(tick, DELAY);
+
+})();
+</script>
+</body>
+</html>

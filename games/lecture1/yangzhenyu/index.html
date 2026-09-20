@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>八方向贪吃蛇 | 金苹果 + / 紫毒苹果 −</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: #0b1120;
+    color: #f4f7fb;
+    font-family: "PingFang SC", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+  .screen { display: flex; flex-direction: column; align-items: center; }
+
+  /* ===== MapPicker（还原原版选择地图窗口） ===== */
+  #picker {
+    width: 520px; max-width: 94vw;
+    background: #111827;
+    padding: 25px 36px 30px;
+    border-radius: 4px;
+  }
+  #picker .brand { color: #7ad3a6; font-size: 12px; font-weight: bold; letter-spacing: 1px; text-align: left; width: 100%; }
+  #picker h1 { color: #f4f7fb; font-size: 27px; margin: 10px 0 6px; text-align: left; width: 100%; }
+  #picker .sub { color: #9cacbf; font-size: 12px; text-align: left; width: 100%; }
+  #picker .row { display: flex; gap: 6px; margin: 22px 0 14px; width: 100%; }
+  #picker .row button {
+    flex: 1; padding: 8px 4px; font-size: 11px; cursor: pointer;
+    background: #1c2942; color: #d8e4ef; border: 1px solid #2c3d5c; border-radius: 3px;
+  }
+  #picker .row button.active { background: #2b4a3c; border-color: #7ad3a6; color: #bfeed6; }
+  #picker .custom { display: flex; align-items: center; justify-content: space-between; width: 100%; color: #d8e4ef; font-size: 12px; }
+  #picker .custom input {
+    width: 70px; font-size: 15px; text-align: center; padding: 3px;
+    background: #0d1526; color: #f4f7fb; border: 1px solid #2c3d5c; border-radius: 3px;
+  }
+  #picker .wrap-row { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 12px; color: #d8e4ef; font-size: 12px; cursor: pointer; user-select: none; }
+  #picker .wrap-row input { accent-color: #45cc86; }
+  #preview { margin: 14px 0 4px; background: #111827; }
+  #picker .desc { color: #a8c4b7; font-size: 11px; min-height: 15px; }
+  #picker .error { color: #ff9b9b; font-size: 11px; min-height: 15px; margin: 5px 0; }
+  #picker .start {
+    width: 100%; padding: 9px; font-size: 15px; font-weight: bold; cursor: pointer;
+    background: #2b4a3c; color: #bfeed6; border: 1px solid #45cc86; border-radius: 3px;
+  }
+  #picker .start:hover { background: #35594a; }
+
+  /* ===== 游戏画面 ===== */
+  #game { display: none; }
+  #hud {
+    width: 100%;
+    background: #111827;
+    color: #d3dce9;
+    font-size: 12px;
+    padding: 6px 10px;
+    border: 1px solid #223047;
+    border-bottom: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #boardWrap { line-height: 0; }
+  canvas#board { background: #111827; outline: none; display: block; }
+  .byline { color: #5b6b84; font-size: 10px; margin-top: 5px; align-self: flex-end; }
+</style>
+</head>
+<body>
+
+<!-- 地图选择（MapPicker） -->
+<div id="picker" class="screen">
+  <div class="brand">S N A K E&nbsp;&nbsp;/&nbsp;&nbsp;V3</div>
+  <h1>选择你的地图</h1>
+  <div class="sub">小地图更紧张，大地图有更多腾挪空间。</div>
+  <div class="row">
+    <button data-n="15">紧凑 · 15×15</button>
+    <button data-n="25" class="active">标准 · 25×25</button>
+    <button data-n="35">宽阔 · 35×35</button>
+  </div>
+  <div class="custom">
+    <span>自定义边长（10–50 格）</span>
+    <input id="sizeInput" type="number" min="10" max="50" value="25">
+  </div>
+  <label class="wrap-row"><input id="wrapInput" type="checkbox"> 允许穿墙（碰到边缘从另一侧出现）</label>
+  <canvas id="preview" width="110" height="110"></canvas>
+  <div class="desc" id="desc"></div>
+  <div class="error" id="error"></div>
+  <button class="start" id="startBtn">开始游戏&nbsp;&nbsp;→</button>
+  <div class="byline">by 杨震宇</div>
+</div>
+
+<!-- 游戏 -->
+<div id="game" class="screen">
+  <div id="hud"></div>
+  <div id="boardWrap"><canvas id="board" tabindex="0"></canvas></div>
+  <div class="byline">八方向：QWE/AD/ZXC 或方向键组合斜向 · 空格暂停 · R 重开 · Esc 返回菜单&nbsp;&nbsp;|&nbsp;&nbsp;by 杨震宇</div>
+</div>
+
+<script>
+"use strict";
+
+/* ================= Settings（对应原版 Settings） ================= */
+const BASE = {
+  grid_size: 25,
+  cell_size: 24,
+  step_ms: 140,
+  initial_length: 4,
+  apple_range: [1, 3],
+  poison_range: [0, 1],
+  apple_refresh_s: 8.0,
+  poison_refresh_s: 5.0,
+  apple_score: 10,
+  apple_growth: 1,
+  poison_penalty: 15,
+  poison_shrink: 2,
+  min_length: 2,
+  snake_color: "#45cc86",
+  head_color: "#9cffb3",
+  apple_color: "#ffbe55",
+  poison_color: "#ca85ff",
+  background: "#111827",
+  grid_color: "#223047",
+  show_grid: true,
+  wrap_edges: false,
+};
+
+const LS_PREFIX = "sg-l1-yangzhenyu-";
+
+/* ================= 工具 ================= */
+function shade(hex, amount) {
+  const v = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+  return "#" + v.map(c => {
+    const x = amount >= 0 ? c + (255 - c) * amount : c * (1 + amount);
+    return Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, "0");
+  }).join("");
+}
+
+/* ================= SnakeGame（忠实移植原版规则） ================= */
+class SnakeGame {
+  constructor(cfg, now) {
+    this.cfg = cfg;
+    this.reset(now);
+  }
+  reset(now) {
+    const c = this.cfg;
+    const y = c.grid_size >> 1;
+    this.snake = [];
+    for (let i = 0; i < c.initial_length; i++) this.snake.push([c.initial_length - 1 - i, y]);
+    this.direction = [1, 0];
+    this.pending_direction = [1, 0];
+    this.turn_pending = false;
+    this.growth_left = 0;
+    this.score = 0;
+    this.alive = true;
+    this.message = "";
+    this.apples = new Set();
+    this.poisons = new Set();
+    this.respawn("apple");
+    this.respawn("poison");
+    this.next_apple = now + c.apple_refresh_s * 1000;
+    this.next_poison = now + c.poison_refresh_s * 1000;
+  }
+  idx(x, y) { return y * this.cfg.grid_size + x; }
+  freeCells() {
+    const occ = new Set();
+    for (const [x, y] of this.snake) occ.add(this.idx(x, y));
+    for (const i of this.apples) occ.add(i);
+    for (const i of this.poisons) occ.add(i);
+    const free = [];
+    const n = this.cfg.grid_size;
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++)
+      if (!occ.has(this.idx(x, y))) free.push(this.idx(x, y));
+    return free;
+  }
+  respawn(kind) {
+    // 每次刷新替换该类全部食物，所以不会累积毒苹果。
+    const target = kind === "apple" ? this.apples : this.poisons;
+    const bounds = kind === "apple" ? this.cfg.apple_range : this.cfg.poison_range;
+    target.clear();
+    const free = this.freeCells();
+    let count = Math.min(bounds[0] + Math.floor(Math.random() * (bounds[1] - bounds[0] + 1)), free.length);
+    while (count-- > 0 && free.length) {
+      const i = Math.floor(Math.random() * free.length);
+      target.add(free.splice(i, 1)[0]);
+    }
+  }
+  refillMinimum() {
+    // 吃完立刻补足下限；上限为零时完全禁用该类食物。
+    for (const [target, bounds] of [[this.apples, this.cfg.apple_range], [this.poisons, this.cfg.poison_range]]) {
+      const free = this.freeCells();
+      let count = Math.min(Math.max(0, bounds[0] - target.size), free.length);
+      while (count-- > 0 && free.length) {
+        const i = Math.floor(Math.random() * free.length);
+        target.add(free.splice(i, 1)[0]);
+      }
+    }
+  }
+  turn(d) {
+    // 一步只接受一次转向，避免快速连按绕过禁止掉头的规则。
+    if (this.turn_pending || (d[0] === this.direction[0] && d[1] === this.direction[1])) return;
+    if (d[0] === -this.direction[0] && d[1] === -this.direction[1]) return;
+    this.pending_direction = d;
+    this.turn_pending = true;
+  }
+  refresh(now) {
+    if (now >= this.next_apple) {
+      this.respawn("apple");
+      this.next_apple = now + this.cfg.apple_refresh_s * 1000;
+    }
+    if (now >= this.next_poison) {
+      this.respawn("poison");
+      this.next_poison = now + this.cfg.poison_refresh_s * 1000;
+    }
+  }
+  step(now) {
+    if (!this.alive) return;
+    const c = this.cfg, n = c.grid_size;
+    this.refresh(now);
+    this.direction = this.pending_direction;
+    this.turn_pending = false;
+    const [x, y] = this.snake[0];
+    const [dx, dy] = this.direction;
+    let hx = x + dx, hy = y + dy;
+    if (c.wrap_edges) {
+      hx = ((hx % n) + n) % n;
+      hy = ((hy % n) + n) % n;
+    } else if (hx < 0 || hy < 0 || hx >= n || hy >= n) {
+      this.alive = false; this.message = "撞墙了";
+      return;
+    }
+    const hi = this.idx(hx, hy);
+    const apple = this.apples.has(hi), poison = this.poisons.has(hi);
+    // 生长欠账支持一次奖励增长多个格子。
+    let growth = this.growth_left;
+    if (apple) growth += c.apple_growth;
+    if (poison) growth = 0; // 毒苹果也会取消尚未完成的增长
+    const keepTail = growth > 0;
+    const occupied = keepTail ? this.snake : this.snake.slice(0, -1);
+    if (occupied.some(([sx, sy]) => sx === hx && sy === hy)) {
+      this.alive = false; this.message = "撞到自己了";
+      return;
+    }
+    this.snake.unshift([hx, hy]);
+    if (keepTail) growth -= 1;
+    else this.snake.pop();
+    this.growth_left = growth;
+    if (apple) {
+      this.apples.delete(hi);
+      this.score += c.apple_score;
+    }
+    if (poison) {
+      this.poisons.delete(hi);
+      this.score -= c.poison_penalty;
+      if (this.snake.length - c.poison_shrink < c.min_length) {
+        this.alive = false; this.message = "毒苹果使蛇短于最小长度";
+        return;
+      }
+      this.snake.length -= c.poison_shrink;
+    }
+    if (this.snake.length === n * n) {
+      this.alive = false; this.message = "你填满了棋盘，胜利！";
+      return;
+    }
+    this.refillMinimum();
+  }
+}
+
+/* ================= 键盘映射（QWE/AD/ZXC + 方向键 + Home/PageUp/End/PageDown） ================= */
+const KEYS = {
+  q: [-1, -1], w: [0, -1], e: [1, -1],
+  a: [-1, 0],               d: [1, 0],
+  z: [-1, 1],  x: [0, 1],  c: [1, 1],
+  ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+  Home: [-1, -1], PageUp: [1, -1], End: [-1, 1], PageDown: [1, 1],
+};
+const ARROWS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+
+/* ================= 全局状态 ================= */
+let cfg = null;
+let game = null;
+let paused = false;
+let pauseStarted = 0;
+let nextMove = 0;
+let heldArrows = new Set();
+let inGame = false;
+
+const board = document.getElementById("board");
+const ctx = board.getContext("2d");
+const hud = document.getElementById("hud");
+const pickerEl = document.getElementById("picker");
+const gameEl = document.getElementById("game");
+
+/* ================= MapPicker ================= */
+const sizeInput = document.getElementById("sizeInput");
+const wrapInput = document.getElementById("wrapInput");
+const descEl = document.getElementById("desc");
+const errorEl = document.getElementById("error");
+const preview = document.getElementById("preview");
+const pctx = preview.getContext("2d");
+
+function selectedSettings() {
+  const n = parseInt(sizeInput.value, 10);
+  if (isNaN(n)) throw new Error("请输入 10–50 之间的整数。");
+  if (n < 10 || n > 50) throw new Error("地图边长应为 10–50 格。");
+  // 保持正方形，在大地图时缩小格子，避免画面超出可视区。
+  const available = 600;
+  const cell = Math.min(BASE.cell_size, Math.max(1, Math.floor(available / n)));
+  return Object.assign({}, BASE, { grid_size: n, cell_size: cell, wrap_edges: wrapInput.checked });
+}
+
+function updatePreview() {
+  pctx.clearRect(0, 0, 110, 110);
+  let c;
+  try {
+    c = selectedSettings();
+    errorEl.textContent = "";
+  } catch (e) {
+    errorEl.textContent = e.message;
+    descEl.textContent = "";
+    return;
+  }
+  const n = c.grid_size;
+  pctx.strokeStyle = "#28463e";
+  pctx.lineWidth = 1;
+  for (let i = 0; i <= n; i++) {
+    const p = 5 + i * 100 / n;
+    pctx.beginPath(); pctx.moveTo(p, 5); pctx.lineTo(p, 105); pctx.stroke();
+    pctx.beginPath(); pctx.moveTo(5, p); pctx.lineTo(105, p); pctx.stroke();
+  }
+  pctx.strokeStyle = "#7ad3a6";
+  pctx.lineWidth = 2;
+  pctx.strokeRect(5, 5, 100, 100);
+  descEl.textContent = `${n} × ${n} 格  ·  ${n * n} 个格子  ·  画面 ${n * c.cell_size} × ${n * c.cell_size} 像素`;
+}
+
+document.querySelectorAll("#picker .row button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    sizeInput.value = btn.dataset.n;
+    document.querySelectorAll("#picker .row button").forEach(b => b.classList.toggle("active", b === btn));
+    updatePreview();
+  });
+});
+sizeInput.addEventListener("input", () => {
+  document.querySelectorAll("#picker .row button").forEach(b =>
+    b.classList.toggle("active", b.dataset.n === sizeInput.value));
+  updatePreview();
+});
+sizeInput.addEventListener("keydown", e => {
+  if (e.key === "Enter") startGame();
+  e.stopPropagation();
+});
+document.getElementById("startBtn").addEventListener("click", startGame);
+updatePreview();
+
+/* ================= 画布绘制（V3 Canvas 造型移植） ================= */
+function oval(x1, y1, x2, y2, fill, stroke, lw) {
+  ctx.beginPath();
+  ctx.ellipse((x1 + x2) / 2, (y1 + y2) / 2, Math.abs(x2 - x1) / 2, Math.abs(y2 - y1) / 2, 0, 0, Math.PI * 2);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw || 1; ctx.stroke(); }
+}
+
+// tkinter smooth=True 多边形的近似：顶点处二次贝塞尔过渡
+function smoothPoly(pts, fill, stroke, lw) {
+  const n = pts.length;
+  if (n < 3) return;
+  ctx.beginPath();
+  ctx.moveTo((pts[0][0] + pts[n - 1][0]) / 2, (pts[0][1] + pts[n - 1][1]) / 2);
+  for (let i = 0; i < n; i++) {
+    const p = pts[i], q = pts[(i + 1) % n];
+    ctx.quadraticCurveTo(p[0], p[1], (p[0] + q[0]) / 2, (p[1] + q[1]) / 2);
+  }
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw || 1; ctx.stroke(); }
+}
+
+function line(points, color, width) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+  ctx.stroke();
+}
+
+// 双肩、底部凹口与分层高光形成苹果轮廓；毒苹果附枯斑与骷髅。
+function drawApple(point, color, poison) {
+  const s = cfg.cell_size;
+  const x = (point[0] + .5) * s, y = (point[1] + .5) * s;
+  const outline = [[-.36, -.14], [-.31, -.32], [-.14, -.37], [0, -.27],
+                   [.14, -.37], [.32, -.29], [.38, -.10], [.31, .20],
+                   [.16, .36], [0, .30], [-.16, .36], [-.31, .19]];
+  oval(x - .34 * s, y + .26 * s, x + .37 * s, y + .43 * s, "#080e18");
+  for (const [scale, off, fill] of [[1, 0, shade(color, -.38)],
+                                    [.91, -.025, color],
+                                    [.69, -.065, shade(color, .20)]]) {
+    smoothPoly(outline.map(([a, b]) => [x + (a * scale + off) * s, y + (b * scale + off) * s]), fill);
+  }
+  // 果柄
+  ctx.strokeStyle = "#865535";
+  ctx.lineWidth = Math.max(1.5, s * .07);
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(x, y - .27 * s);
+  ctx.quadraticCurveTo(x + .025 * s, y - .43 * s, x + .095 * s, y - .46 * s);
+  ctx.stroke();
+  // 叶子
+  smoothPoly([[x + .035 * s, y - .34 * s], [x + .15 * s, y - .48 * s],
+              [x + .36 * s, y - .40 * s], [x + .21 * s, y - .27 * s]],
+             poison ? "#7a965a" : "#85ac53");
+  line([[x + .075 * s, y - .33 * s], [x + .27 * s, y - .40 * s]], "#c6df89", Math.max(1, s * .025));
+  oval(x - .23 * s, y - .24 * s, x - .12 * s, y - .02 * s, shade(color, .70));
+  oval(x - .12 * s, y - .28 * s, x - .06 * s, y - .20 * s, shade(color, .80));
+  if (poison) {
+    // 枯斑与骷髅：即使更改颜色也能辨认毒苹果。
+    for (const [a, b] of [[.24, -.10], [-.20, .18], [.22, .20]])
+      oval(x + (a - .035) * s, y + (b - .035) * s, x + (a + .035) * s, y + (b + .035) * s, shade(color, -.55));
+    oval(x - .12 * s, y - .04 * s, x + .18 * s, y + .18 * s, "#f1e8ce");
+    ctx.fillStyle = "#f1e8ce";
+    ctx.fillRect(x - .055 * s, y + .10 * s, .16 * s, .13 * s);
+    for (const a of [-.045, .095])
+      oval(x + (a - .028) * s, y + .045 * s, x + (a + .028) * s, y + .10 * s, "#352e46");
+    line([[x + .025 * s, y + .15 * s], [x + .025 * s, y + .22 * s]], "#352e46", 1);
+  }
+}
+
+// 沿身体中心线绘制渐细轮廓；短距离圆角，不改变碰撞网格。
+function drawSnake() {
+  const c = cfg, g = game, s = c.cell_size;
+  const centers = g.snake.slice().reverse().map(([x, y]) => [(x + .5) * s, (y + .5) * s]);
+  const body = c.snake_color;
+  // 先断开穿墙跳跃，避免出现横穿地图的身体。
+  const runs = [];
+  let run = [];
+  for (const p of centers) {
+    if (run.length && Math.max(Math.abs(p[0] - run[run.length - 1][0]), Math.abs(p[1] - run[run.length - 1][1])) > s * 1.1) {
+      runs.push(run); run = [];
+    }
+    run.push(p);
+  }
+  if (run.length) runs.push(run);
+
+  function smoothPath(points) {
+    if (points.length < 3) return points.slice();
+    const result = [points[0]];
+    for (let i = 1; i < points.length - 1; i++) {
+      const a = points[i - 1], b = points[i], d = points[i + 1];
+      const entry = [b[0] + (a[0] - b[0]) * .22, b[1] + (a[1] - b[1]) * .22];
+      const leave = [b[0] + (d[0] - b[0]) * .22, b[1] + (d[1] - b[1]) * .22];
+      result.push(entry);
+      for (let j = 1; j < 7; j++) {
+        const t = j / 6;
+        result.push([(1 - t) * (1 - t) * entry[0] + 2 * t * (1 - t) * b[0] + t * t * leave[0],
+                     (1 - t) * (1 - t) * entry[1] + 2 * t * (1 - t) * b[1] + t * t * leave[1]]);
+      }
+    }
+    result.push(points[points.length - 1]);
+    return result;
+  }
+
+  for (let ri = 0; ri < runs.length; ri++) {
+    const path = smoothPath(runs[ri]);
+    if (path.length < 2) {
+      oval(path[0][0] - s * .30, path[0][1] - s * .30, path[0][0] + s * .30, path[0][1] + s * .30, body);
+      continue;
+    }
+    // 细密采样让尾端在约 1.5 格内平滑变宽。
+    let samples = [path[0]];
+    for (let i = 0; i < path.length - 1; i++) {
+      const a = path[i], b = path[i + 1];
+      const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / (s * .12)));
+      for (let j = 1; j <= steps; j++)
+        samples.push([a[0] + (b[0] - a[0]) * j / steps, a[1] + (b[1] - a[1]) * j / steps]);
+    }
+    const distances = [0];
+    for (let i = 0; i < samples.length - 1; i++)
+      distances.push(distances[i] + Math.hypot(samples[i + 1][0] - samples[i][0], samples[i + 1][1] - samples[i][1]));
+    const normals = samples.map((p, i) => {
+      const a = samples[Math.max(0, i - 1)], b = samples[Math.min(samples.length - 1, i + 1)];
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const len = Math.hypot(dx, dy) || 1;
+      return [-dy / len, dx / len];
+    });
+    function ribbon(scale, offset, color) {
+      const left = [], right = [];
+      for (let i = 0; i < samples.length; i++) {
+        const taper = ri === 0 ? Math.min(1, distances[i] / (s * 1.5)) : 1;
+        const radius = s * (.025 + .29 * Math.sin(taper * Math.PI / 2)) * scale;
+        const cx = samples[i][0] + offset[0] * s, cy = samples[i][1] + offset[1] * s;
+        left.push([cx + normals[i][0] * radius, cy + normals[i][1] * radius]);
+        right.push([cx - normals[i][0] * radius, cy - normals[i][1] * radius]);
+      }
+      ctx.beginPath();
+      ctx.moveTo(left[0][0], left[0][1]);
+      for (let i = 1; i < left.length; i++) ctx.lineTo(left[i][0], left[i][1]);
+      for (let i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i][0], right[i][1]);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+    ribbon(1.14, [.025, .075], "#080e18");
+    ribbon(1.06, [0, 0], shade(body, -.38));
+    ribbon(.92, [-.018, -.025], body);
+    ribbon(.60, [-.038, -.065], shade(body, .14));
+    ribbon(.20, [-.06, -.09], shade(body, .29));
+  }
+
+  // 杏仁形蛇头，采用原头部颜色；小眼睛、鼻孔与细嘴线。
+  const [hx, hy] = g.snake[0];
+  const x = (hx + .5) * s, y = (hy + .5) * s;
+  const [dx, dy] = g.direction;
+  const len = Math.hypot(dx, dy);
+  const ux = dx / len, uy = dy / len;
+  const p = (f, t) => [x + s * (ux * f - uy * t), y + s * (uy * f + ux * t)];
+  const headOutline = [[-.42, -.19], [-.25, -.29], [.02, -.32], [.27, -.23],
+                       [.40, -.10], [.42, 0], [.40, .10], [.27, .23],
+                       [.02, .32], [-.25, .29], [-.42, .19]];
+  const rim = shade(body, -.40);
+  smoothPoly(headOutline.map(([f, t]) => p(f, t)), c.head_color, rim, Math.max(1, s * .04));
+  smoothPoly([[-.31, -.10], [-.08, -.22], [.23, -.11], [.28, 0], [0, .07], [-.28, .04]].map(([f, t]) => p(f, t)),
+             shade(c.head_color, .18));
+  for (const side of [-1, 1]) {
+    const [ex, ey] = p(.10, side * .225);
+    const r = s * .077;
+    oval(ex - r, ey - r, ex + r, ey + r, "#edcc6b", rim, Math.max(1, s * .03));
+    line([p(.065, side * .225), p(.135, side * .225)], "#13251c", Math.max(1.4, s * .047));
+    const [px, py] = p(.08, side * .20);
+    oval(px - s * .017, py - s * .017, px + s * .017, py + s * .017, "#fff7da");
+    const [nx, ny] = p(.31, side * .095);
+    const nr = Math.max(.65, s * .022);
+    oval(nx - nr, ny - nr, nx + nr, ny + nr, rim);
+  }
+  // 嘴线（smooth）
+  const m1 = p(.29, -.13), m2 = p(.34, 0), m3 = p(.29, .13);
+  ctx.strokeStyle = shade(body, -.2);
+  ctx.lineWidth = Math.max(1, s * .025);
+  ctx.beginPath();
+  ctx.moveTo(m1[0], m1[1]);
+  ctx.quadraticCurveTo(m2[0], m2[1], m3[0], m3[1]);
+  ctx.stroke();
+}
+
+function cellOf(i) { return [i % cfg.grid_size, Math.floor(i / cfg.grid_size)]; }
+
+function draw(now) {
+  const c = cfg, g = game, s = c.cell_size;
+  const size = c.grid_size * s;
+  ctx.fillStyle = c.background;
+  ctx.fillRect(0, 0, size, size);
+  if (c.show_grid) {
+    ctx.strokeStyle = c.grid_color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let p = 0; p <= size; p += s) {
+      ctx.moveTo(p + .5, 0); ctx.lineTo(p + .5, size);
+      ctx.moveTo(0, p + .5); ctx.lineTo(size, p + .5);
+    }
+    ctx.stroke();
+  }
+  for (const i of g.apples) drawApple(cellOf(i), c.apple_color, false);
+  for (const i of g.poisons) drawApple(cellOf(i), c.poison_color, true);
+  drawSnake();
+
+  // 状态栏（原版显示在窗口标题）
+  const t = paused ? pauseStarted : now;
+  const best = bestScore();
+  hud.textContent = `分数 ${g.score}  长度 ${g.snake.length}  ` +
+    `苹果 ${g.apples.size} / 毒 ${g.poisons.size}  ` +
+    `刷新 ${(Math.max(0, g.next_apple - t) / 1000).toFixed(1)}s / ${(Math.max(0, g.next_poison - t) / 1000).toFixed(1)}s` +
+    (best > 0 ? `  最高 ${best}` : "");
+
+  if (paused || !g.alive) {
+    ctx.fillStyle = "#182338";
+    ctx.strokeStyle = "#6b829f";
+    ctx.lineWidth = 1;
+    ctx.fillRect(size * .07, size * .37, size * .86, size * .26);
+    ctx.strokeRect(size * .07, size * .37, size * .86, size * .26);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "white";
+    ctx.font = `bold ${Math.max(13, size * .03)}px Arial, sans-serif`;
+    ctx.fillText(paused ? "已暂停" : g.message, size / 2, size * .46);
+    ctx.fillStyle = "#d3dce9";
+    ctx.font = `${Math.max(10, size * .02)}px Arial, sans-serif`;
+    ctx.fillText(paused ? "空格继续 · R 重开 · Esc 返回菜单" : "R 重新开始 · Esc 返回菜单", size / 2, size * .56);
+  }
+}
+
+/* ================= 最高分（localStorage） ================= */
+function bestScore() {
+  const v = localStorage.getItem(LS_PREFIX + "best-" + cfg.grid_size + (cfg.wrap_edges ? "-wrap" : ""));
+  return v ? parseInt(v, 10) || 0 : 0;
+}
+function saveBest() {
+  if (game.score > bestScore())
+    localStorage.setItem(LS_PREFIX + "best-" + cfg.grid_size + (cfg.wrap_edges ? "-wrap" : ""), String(game.score));
+}
+
+/* ================= 主循环 ================= */
+function arrowDirection() {
+  // 同轴相反键抵消；释放全部键后保持当前运动方向。
+  const dx = (heldArrows.has("ArrowRight") ? 1 : 0) - (heldArrows.has("ArrowLeft") ? 1 : 0);
+  const dy = (heldArrows.has("ArrowDown") ? 1 : 0) - (heldArrows.has("ArrowUp") ? 1 : 0);
+  return (dx || dy) ? [dx, dy] : null;
+}
+
+function loop(now) {
+  if (!inGame) return;
+  if (game.alive && !paused) {
+    game.refresh(now);
+    if (now >= nextMove) {
+      const d = arrowDirection();
+      if (d) game.turn(d);
+      game.step(now);
+      nextMove = now + cfg.step_ms;
+      if (!game.alive) saveBest();
+    }
+  }
+  draw(now);
+  requestAnimationFrame(loop);
+}
+
+/* ================= 画面切换与自适应 ================= */
+function fitBoard() {
+  if (!inGame) return;
+  const logical = cfg.grid_size * cfg.cell_size;
+  const availW = window.innerWidth - 16;
+  const availH = window.innerHeight - 70; // HUD + 底部署名行
+  const scale = Math.min(1, availW / logical, availH / logical);
+  board.style.width = (logical * scale) + "px";
+  board.style.height = (logical * scale) + "px";
+  hud.style.width = (logical * scale) + "px";
+}
+window.addEventListener("resize", fitBoard);
+
+function startGame() {
+  try {
+    cfg = selectedSettings();
+  } catch (e) {
+    errorEl.textContent = e.message;
+    return;
+  }
+  const logical = cfg.grid_size * cfg.cell_size;
+  board.width = logical;
+  board.height = logical;
+  pickerEl.style.display = "none";
+  gameEl.style.display = "flex";
+  inGame = true;
+  resetGame();
+  fitBoard();
+  board.focus();
+  requestAnimationFrame(loop);
+}
+
+function resetGame() {
+  const now = performance.now();
+  game = new SnakeGame(cfg, now);
+  heldArrows.clear();
+  paused = false;
+  nextMove = now + cfg.step_ms;
+}
+
+function backToMenu() {
+  inGame = false;
+  gameEl.style.display = "none";
+  pickerEl.style.display = "flex";
+}
+
+/* ================= 键盘 ================= */
+document.addEventListener("keydown", e => {
+  if (!inGame) {
+    if (e.key === "Enter" && e.target !== sizeInput) startGame();
+    if (e.key === "Escape") { /* 原版为取消启动，网页版无需处理 */ }
+    return;
+  }
+  const raw = e.key;
+  const key = (raw in KEYS || raw === "Escape") ? raw : raw.toLowerCase();
+
+  // 避免 iframe 里滚动页面
+  if (ARROWS.includes(raw) || raw === " " || ["Home", "End", "PageUp", "PageDown"].includes(raw))
+    e.preventDefault();
+
+  if (ARROWS.includes(raw)) {
+    if (game.alive && !paused) heldArrows.add(raw);
+    return;
+  }
+  if (key === "Escape") {
+    saveBest();
+    backToMenu();
+  } else if (key === "r") {
+    saveBest();
+    resetGame();
+  } else if (key === " " && game.alive) {
+    const now = performance.now();
+    heldArrows.clear();
+    if (!paused) {
+      paused = true;
+      pauseStarted = now;
+    } else {
+      const elapsed = now - pauseStarted;
+      game.next_apple += elapsed;
+      game.next_poison += elapsed;
+      nextMove += elapsed;
+      paused = false;
+    }
+  } else if (key in KEYS && game.alive && !paused) {
+    game.turn(KEYS[key]);
+  }
+});
+
+document.addEventListener("keyup", e => {
+  heldArrows.delete(e.key);
+});
+window.addEventListener("blur", () => heldArrows.clear());
+board.addEventListener("click", () => board.focus());
+</script>
+</body>
+</html>

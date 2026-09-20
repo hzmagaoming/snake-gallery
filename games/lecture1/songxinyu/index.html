@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>贪吃蛇 · 莫兰迪小吃街</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; }
+  body {
+    background:#e9e6e2;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    font-family:"Microsoft YaHei","PingFang SC",sans-serif;
+    user-select:none; -webkit-user-select:none;
+  }
+  #wrap { position:relative; transform-origin:center center; outline:none; }
+  canvas { display:block; }
+  #hud {
+    width:100%; box-sizing:border-box;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:4px 14px; color:#5f5b56; font-size:15px;
+  }
+  #hud .zoom-btns { display:flex; gap:8px; }
+  button {
+    font-family:inherit; border:none; cursor:pointer; border-radius:4px;
+    background:#f6f4f1; color:#5f5b56;
+  }
+  button:hover { background:#d8d3cd; }
+  .zoom-btns button { width:34px; height:26px; font-size:14px; }
+  #topbtns { position:fixed; top:10px; right:10px; display:flex; gap:8px; z-index:5; }
+  #topbtns button { padding:3px 10px; font-size:13px; }
+  #btnStart {
+    position:absolute; left:50%; top:60%; transform:translate(-50%,-50%);
+    font-size:22px; font-weight:bold; padding:10px 30px;
+    background:#e3b8b8; color:#7a4a4a; border-radius:6px;
+  }
+  #btnStart:hover { background:#d8a5a5; }
+  #byline {
+    position:fixed; right:8px; bottom:6px; font-size:11px; color:#9a948d; z-index:5;
+  }
+  #rulesMask {
+    position:fixed; inset:0; background:rgba(95,91,86,.25);
+    display:none; align-items:center; justify-content:center; z-index:10;
+  }
+  #rulesCard {
+    background:#f6f4f1; border:1px solid #d8d3cd; border-radius:10px;
+    padding:18px 34px 16px; color:#5f5b56; max-width:86vw;
+    box-shadow:0 6px 24px rgba(95,91,86,.25);
+  }
+  #rulesCard h2 { margin:0 0 10px; font-size:19px; text-align:center; }
+  #rulesCard p { margin:4px 0; font-size:14px; line-height:1.5; }
+  #rulesCard .okwrap { text-align:center; margin-top:14px; }
+  #rulesCard .okwrap button {
+    background:#e3b8b8; color:#7a4a4a; padding:5px 18px; font-size:13px;
+  }
+  #rulesCard .okwrap button:hover { background:#d8a5a5; }
+</style>
+</head>
+<body>
+<div id="topbtns">
+  <button id="btnQuit">退出</button>
+  <button id="btnRules">规则</button>
+</div>
+<div id="wrap" tabindex="0">
+  <canvas id="cv" width="600" height="400"></canvas>
+  <button id="btnStart">开吃！</button>
+</div>
+<div id="hud">
+  <span id="scoreLabel">得分: 0    速度等级: Lv.0</span>
+  <span class="zoom-btns">
+    <button id="btnZoomOut">－</button>
+    <button id="btnZoomIn">＋</button>
+  </span>
+</div>
+<div id="byline">by 宋欣雨</div>
+<div id="rulesMask">
+  <div id="rulesCard">
+    <h2>游戏规则</h2>
+    <p>1. 小蛇会自动前进，方向键 / WASD 只负责转向；</p>
+    <p>2. 吃到食物 +10 分，食物样式随机出现；</p>
+    <p>3. 每 50 分升一级：速度加快，并新增一个障碍块；</p>
+    <p>4. 撞到石块、撞到墙或咬到自己，游戏结束；</p>
+    <p>5. 空格 暂停 / 继续；结束后按回车再来一局；</p>
+    <p>6. 底部「－ / ＋」或 +/- 键缩放画面；右上角「退出」或 Esc 退出游戏。</p>
+    <div class="okwrap"><button id="btnRulesOk">知道了</button></div>
+  </div>
+</div>
+<script>
+"use strict";
+
+// ---------------- 常量（与原版一致） ----------------
+const CELL = 20;
+const COLS = 30, ROWS = 20;
+
+const OBSTACLE_GROUPS = 4;
+const SAFE_RADIUS = 3;
+const START_LEN = 3;
+
+const BASE_SPEED = 220;
+const SPEED_STEP = 12;
+const MIN_SPEED = 90;
+const LEVEL_SCORE = 50;
+
+const ZOOM_MIN = 0.6, ZOOM_MAX = 2.0, ZOOM_STEP = 0.2;
+
+// ---------------- 莫兰迪色板 ----------------
+const COLOR_BG = "#e9e6e2";
+const COLOR_BG_ALT = "#f2f0ed";
+const COLOR_CARD = "#f6f4f1";
+const COLOR_CARD_EDGE = "#d8d3cd";
+
+const COLOR_SNAKE = "#b4c8a6";
+const COLOR_SNAKE_EDGE = "#9ab088";
+const COLOR_SNAKE_BELLY = "#dbe5d0";
+const COLOR_SHADOW = "#d5d0ca";
+const COLOR_HEAD = "#a9c096";
+const COLOR_HEAD_EDGE = "#8ea87c";
+const COLOR_TONGUE = "#cd9a9a";
+const COLOR_CHEEK = "#e3b8b8";
+const COLOR_EYE = "#fbfaf8";
+const COLOR_PUPIL = "#5b5a57";
+
+const COLOR_ROCK = "#cfc8c1";
+const COLOR_ROCK_EDGE = "#b2aaa2";
+const COLOR_ROCK_LIGHT = "#e2ddd6";
+
+const COLOR_APPLE = "#c08a84";
+const COLOR_APPLE_DARK = "#a17069";
+const COLOR_APPLE_HL = "#dcb3ad";
+const COLOR_STEM = "#9c8b78";
+const COLOR_LEAF = "#a9b896";
+
+const COLOR_CUP = "#c9b79b";
+const COLOR_CUP_EDGE = "#ab9a80";
+const COLOR_CREAM = "#e8c8cb";
+const COLOR_CHERRY = "#b98a85";
+const COLOR_SPRINKLE = "#efe3cf";
+
+const COLOR_WATER = "#a8bcc9";
+const COLOR_WATER_EDGE = "#8ba4b3";
+const COLOR_WATER_HL = "#dde7ed";
+
+const COLOR_GRASS = "#a7b892";
+const COLOR_GRASS_DARK = "#8b9c78";
+
+const COLOR_TEXT = "#5f5b56";
+const COLOR_HINT = "#9a948d";
+
+const FOOD_NAMES = { apple: "苹果", cupcake: "小蛋糕", waterdrop: "水滴", grass: "小草" };
+
+// ---------------- DOM ----------------
+const wrap = document.getElementById("wrap");
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+const scoreLabel = document.getElementById("scoreLabel");
+const btnStart = document.getElementById("btnStart");
+const rulesMask = document.getElementById("rulesMask");
+
+// ---------------- 状态 ----------------
+let zoom = 1.0;
+let cell = CELL;           // 当前格子像素（随缩放变化，与原版一致）
+let state = "menu";        // menu -> playing -> over
+let snake = [];
+let direction = [1, 0];
+let nextDirection = [1, 0];
+let obstacles = new Set(); // "x,y"
+let food = null;           // [x, y]
+let foodKind = "apple";
+let score = 0;
+let level = 0;
+let paused = false;
+let gameOver = false;
+let gameOverReason = "";
+let moved = false;
+let eatFlash = null;       // {cell:[x,y], text, ttl}
+
+const key2 = (x, y) => x + "," + y;
+
+// ---------------- 缩放 ----------------
+function applyZoom() {
+  cell = Math.max(8, Math.round(CELL * zoom));
+  cv.width = COLS * cell;
+  cv.height = ROWS * cell;
+  fitToWindow();
+}
+function changeZoom(delta) {
+  zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round((zoom + delta) * 10) / 10));
+  applyZoom();
+  draw();
+}
+// 外层 CSS 缩放，适配 iframe 大小（逻辑分辨率不变）
+function fitToWindow() {
+  const hudH = document.getElementById("hud").offsetHeight;
+  const availW = window.innerWidth - 12;
+  const availH = window.innerHeight - hudH - 12;
+  const s = Math.min(1, availW / cv.width, availH / cv.height);
+  wrap.style.transform = "scale(" + s + ")";
+  wrap.style.width = cv.width + "px";
+  wrap.style.height = cv.height + "px";
+}
+window.addEventListener("resize", fitToWindow);
+
+// ---------------- 游戏状态 ----------------
+function reset() {
+  const cx = COLS >> 1, cy = ROWS >> 1;
+  snake = [];
+  for (let i = 0; i < START_LEN; i++) snake.push([cx - i, cy]);
+  direction = [1, 0];
+  nextDirection = [1, 0];
+  score = 0;
+  level = 0;
+  paused = false;
+  gameOver = false;
+  gameOverReason = "";
+  moved = false;
+  eatFlash = null;
+  updateHud();
+  generateObstacles();
+  spawnFood();
+}
+function speedMs() {
+  return Math.max(MIN_SPEED, BASE_SPEED - level * SPEED_STEP);
+}
+function updateHud() {
+  scoreLabel.textContent = "得分: " + score + "    速度等级: Lv." + level;
+}
+function addObstacleBlock() {
+  const hx = snake[0][0], hy = snake[0][1];
+  const occupied = new Set(obstacles);
+  for (const s of snake) occupied.add(key2(s[0], s[1]));
+  if (food) occupied.add(key2(food[0], food[1]));
+  const candidates = [];
+  for (let x = 0; x < COLS; x++) for (let y = 0; y < ROWS; y++) {
+    if (occupied.has(key2(x, y))) continue;
+    if (Math.abs(x - hx) <= 2 && Math.abs(y - hy) <= 2) continue; // 蛇头附近 5x5 不放
+    candidates.push([x, y]);
+  }
+  if (candidates.length) {
+    const p = candidates[(Math.random() * candidates.length) | 0];
+    obstacles.add(key2(p[0], p[1]));
+  }
+}
+function generateObstacles() {
+  obstacles = new Set();
+  const hx = snake[0][0], hy = snake[0][1];
+  const allowed = new Set();
+  for (let x = 0; x < COLS; x++) for (let y = 0; y < ROWS; y++) {
+    if (Math.abs(x - hx) > SAFE_RADIUS || Math.abs(y - hy) > SAFE_RADIUS)
+      allowed.add(key2(x, y));
+  }
+  for (const s of snake) allowed.delete(key2(s[0], s[1]));
+  const pool = Array.from(allowed);
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    const t = pool[i]; pool[i] = pool[j]; pool[j] = t;
+  }
+  let used = 0;
+  for (const seed of pool) {
+    if (used >= OBSTACLE_GROUPS) break;
+    if (obstacles.has(seed)) continue;
+    const cluster = [seed];
+    obstacles.add(seed);
+    const size = 2 + ((Math.random() * 4) | 0); // 2~5 格
+    for (let k = 0; k < size - 1; k++) {
+      const near = [];
+      for (const ck of cluster) {
+        const cxk = +ck.split(",")[0], cyk = +ck.split(",")[1];
+        for (const d of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const n = key2(cxk + d[0], cyk + d[1]);
+          if (allowed.has(n) && !obstacles.has(n)) near.push(n);
+        }
+      }
+      if (!near.length) break;
+      const n = near[(Math.random() * near.length) | 0];
+      obstacles.add(n);
+      cluster.push(n);
+    }
+    used++;
+  }
+}
+function spawnFood() {
+  const occupied = new Set(obstacles);
+  for (const s of snake) occupied.add(key2(s[0], s[1]));
+  const empty = [];
+  for (let x = 0; x < COLS; x++) for (let y = 0; y < ROWS; y++)
+    if (!occupied.has(key2(x, y))) empty.push([x, y]);
+  if (!empty.length) { food = null; return; }
+  food = empty[(Math.random() * empty.length) | 0];
+  const kinds = Object.keys(FOOD_NAMES);
+  foodKind = kinds[(Math.random() * kinds.length) | 0];
+}
+
+// ---------------- 主循环 ----------------
+function tick() {
+  if (state === "playing" && !paused && !gameOver) {
+    if (!(nextDirection[0] === -direction[0] && nextDirection[1] === -direction[1]))
+      direction = nextDirection;
+    if (!moved) moved = true;
+    step();
+    if (eatFlash) {
+      eatFlash.ttl -= 1;
+      if (eatFlash.ttl <= 0) eatFlash = null;
+    }
+  }
+  if (state !== "menu") draw();
+  setTimeout(tick, speedMs());
+}
+function step() {
+  const hx = snake[0][0], hy = snake[0][1];
+  const nx = hx + direction[0], ny = hy + direction[1];
+
+  if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) {
+    gameOver = true; gameOverReason = "撞到墙了"; return;
+  }
+  if (obstacles.has(key2(nx, ny))) {
+    gameOver = true; gameOverReason = "撞到障碍物了"; return;
+  }
+  // 尾巴这格本次会移走，不算撞到自己
+  for (let i = 0; i < snake.length - 1; i++) {
+    if (snake[i][0] === nx && snake[i][1] === ny) {
+      gameOver = true; gameOverReason = "咬到自己了"; return;
+    }
+  }
+  snake.unshift([nx, ny]);
+  if (food && nx === food[0] && ny === food[1]) {
+    const oldLevel = level;
+    score += 10;
+    level = (score / LEVEL_SCORE) | 0;
+    eatFlash = { cell: [nx, ny], text: FOOD_NAMES[foodKind] + " +10", ttl: 4 };
+    spawnFood();
+    if (level > oldLevel) {
+      addObstacleBlock();
+      eatFlash = { cell: [nx, ny], text: "升级！速度加快，新增障碍块", ttl: 4 };
+    }
+    updateHud();
+  } else {
+    snake.pop();
+  }
+}
+
+// ---------------- 绘制小工具 ----------------
+function center(c) { return [c[0] * cell + cell / 2, c[1] * cell + cell / 2]; }
+function cellBg(c) { return (c[0] + c[1]) % 2 === 0 ? COLOR_BG_ALT : COLOR_BG; }
+function font(size, bold) {
+  return (bold ? "bold " : "") + Math.max(8, Math.round(size * cell / CELL)) +
+    'px "Microsoft YaHei","PingFang SC",sans-serif';
+}
+// 平滑折线（对应 tkinter smooth=True）
+function strokeSmooth(pts, color, width) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(pts[0], pts[1]);
+  const n = pts.length / 2;
+  if (n < 3) {
+    ctx.lineTo(pts[2], pts[3]);
+  } else {
+    for (let i = 1; i < n - 1; i++) {
+      const mx = (pts[i * 2] + pts[i * 2 + 2]) / 2;
+      const my = (pts[i * 2 + 1] + pts[i * 2 + 3]) / 2;
+      ctx.quadraticCurveTo(pts[i * 2], pts[i * 2 + 1], mx, my);
+    }
+    ctx.lineTo(pts[(n - 1) * 2], pts[(n - 1) * 2 + 1]);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+function line(x0, y0, x1, y1, color, width) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  ctx.restore();
+}
+function oval(cx, cy, rx, ry, fill, outline, ow) {
+  ctx.save();
+  ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fillStyle = fill; ctx.fill();
+  if (outline) { ctx.strokeStyle = outline; ctx.lineWidth = ow || 1; ctx.stroke(); }
+  ctx.restore();
+}
+function poly(pts, fill, outline, ow) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = fill; ctx.fill();
+  if (outline) { ctx.strokeStyle = outline; ctx.lineWidth = ow || 1; ctx.stroke(); }
+  ctx.restore();
+}
+// 闭合平滑曲线（对应 smooth 多边形）
+function smoothPoly(pts, fill, outline, ow) {
+  ctx.save();
+  ctx.beginPath();
+  const n = pts.length;
+  const m0 = [(pts[0][0] + pts[n - 1][0]) / 2, (pts[0][1] + pts[n - 1][1]) / 2];
+  ctx.moveTo(m0[0], m0[1]);
+  for (let i = 0; i < n; i++) {
+    const p = pts[i], q = pts[(i + 1) % n];
+    ctx.quadraticCurveTo(p[0], p[1], (p[0] + q[0]) / 2, (p[1] + q[1]) / 2);
+  }
+  ctx.closePath();
+  ctx.fillStyle = fill; ctx.fill();
+  if (outline) { ctx.strokeStyle = outline; ctx.lineWidth = ow || 1; ctx.lineJoin = "round"; ctx.stroke(); }
+  ctx.restore();
+}
+function roundRectPath(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function text(str, x, y, size, bold, color, align) {
+  ctx.save();
+  ctx.font = font(size, bold);
+  ctx.fillStyle = color;
+  ctx.textAlign = align || "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(str, x, y);
+  ctx.restore();
+}
+
+// ---------------- 食物样式（程序化绘制） ----------------
+function drawApple(cx, cy, r, bg) {
+  line(cx, cy - r * 0.75, cx + 2, cy - r * 1.5, COLOR_STEM, 2);
+  oval(cx + (2 + r * 1.05) / 2, cy + (-r * 1.75 - r * 0.95) / 2,
+       (r * 1.05 - 2) / 2, (r * 0.8) / 2, COLOR_LEAF);
+  oval(cx, cy + r * 0.1, r, r, COLOR_APPLE, COLOR_APPLE_DARK, 1);
+  // 顶部凹陷：用格子底色盖出果蒂凹口
+  oval(cx, cy - r * 0.9, r * 0.38, r * 0.28, bg);
+  oval(cx - r * 0.375, cy - r * 0.3, r * 0.175, r * 0.2, COLOR_APPLE_HL);
+}
+function drawCupcake(cx, cy, r, bg) {
+  poly([[cx - r * 0.72, cy + r * 0.1], [cx + r * 0.72, cy + r * 0.1],
+        [cx + r * 0.5, cy + r], [cx - r * 0.5, cy + r]],
+       COLOR_CUP, COLOR_CUP_EDGE, 1);
+  for (const [ox, oy] of [[-0.45, 0], [0, -0.3], [0.45, 0]]) {
+    oval(cx + r * ox, cy + r * oy - r * 0.05, r * 0.5, r * 0.5, COLOR_CREAM);
+  }
+  oval(cx, cy - r * 0.95, r * 0.22, r * 0.22, COLOR_CHERRY);
+  ctx.save();
+  ctx.fillStyle = COLOR_SPRINKLE;
+  for (const [ox, oy] of [[-0.35, -0.1], [0.15, -0.35], [0.4, 0.1]]) {
+    ctx.fillRect(cx + r * ox, cy + r * oy, 2.5, 2.5);
+  }
+  ctx.restore();
+}
+function drawWaterdrop(cx, cy, r, bg) {
+  smoothPoly([[cx, cy - r * 1.15], [cx + r * 0.9, cy + r * 0.15],
+              [cx, cy + r * 0.95], [cx - r * 0.9, cy + r * 0.15]],
+             COLOR_WATER, COLOR_WATER_EDGE, 1);
+  oval(cx - r * 0.285, cy + r * 0.125, r * 0.165, r * 0.225, COLOR_WATER_HL);
+}
+function drawGrass(cx, cy, r, bg) {
+  oval(cx, cy + r * 0.775, r * 0.8, r * 0.225, COLOR_GRASS_DARK);
+  for (const [dx, dy, bend] of [[-0.45, -0.55, -0.6], [0, -1, 0], [0.45, -0.6, 0.6]]) {
+    strokeSmooth([cx, cy + r * 0.7,
+                  cx + r * dx * 0.4, cy + r * 0.1,
+                  cx + r * dx + r * bend * 0.8, cy + r * dy],
+                 COLOR_GRASS, 4);
+  }
+}
+const FOOD_STYLES = { apple: drawApple, cupcake: drawCupcake, waterdrop: drawWaterdrop, grass: drawGrass };
+
+// ---------------- 绘制 ----------------
+function drawGrid() {
+  ctx.fillStyle = COLOR_BG;
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = COLOR_BG_ALT;
+  for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++)
+    if ((x + y) % 2 === 0) ctx.fillRect(x * cell, y * cell, cell, cell);
+}
+function drawObstacles() {
+  const c = cell;
+  const pad = Math.max(1, Math.round(c * 0.1));
+  const rad = Math.round(c * 0.35);
+  const hl = Math.max(2, Math.round(c * 0.3));
+  for (const k of obstacles) {
+    const x = +k.split(",")[0], y = +k.split(",")[1];
+    const x0 = x * c, y0 = y * c;
+    // 圆润鹅卵石
+    roundRectPath(x0 + pad, y0 + pad, c - pad * 2, c - pad * 2, rad);
+    ctx.save();
+    ctx.fillStyle = COLOR_ROCK; ctx.fill();
+    ctx.strokeStyle = COLOR_ROCK_EDGE; ctx.lineWidth = 1; ctx.stroke();
+    ctx.restore();
+    // 柔和高光
+    line(x0 + hl, y0 + c - hl, x0 + hl, y0 + hl, COLOR_ROCK_LIGHT, 2);
+    line(x0 + hl, y0 + hl, x0 + c - hl, y0 + hl, COLOR_ROCK_LIGHT, 2);
+  }
+}
+function drawFood() {
+  if (!food) return;
+  const [cx, cy] = center(food);
+  FOOD_STYLES[foodKind](cx, cy, cell * 0.52, cellBg(food));
+}
+function drawSnake() {
+  const c = cell;
+  const path = [];
+  for (const s of snake) { const p = center(s); path.push(p[0], p[1]); }
+
+  if (snake.length > 2) {
+    // 1) 柔和投影
+    const off = Math.max(2, Math.round(c * 0.15));
+    strokeSmooth(path.map(p => p + off), COLOR_SHADOW, c - 6);
+    // 2) 描边
+    strokeSmooth(path, COLOR_SNAKE_EDGE, c - 2);
+    // 3) 主体
+    strokeSmooth(path, COLOR_SNAKE, c - 7);
+    // 4) 腹部高光条纹
+    strokeSmooth(path, COLOR_SNAKE_BELLY, Math.max(2, Math.round(c * 0.2)));
+  } else {
+    for (const s of snake) {
+      const [cx, cy] = center(s);
+      oval(cx, cy, (c - 7) / 2, (c - 7) / 2, COLOR_SNAKE);
+    }
+  }
+  // 圆圆的尾尖
+  const tr = Math.max(2, Math.round(c * 0.2));
+  const [tx, ty] = center(snake[snake.length - 1]);
+  oval(tx, ty, tr, tr, COLOR_SNAKE, COLOR_SNAKE_EDGE, 1);
+
+  drawHead();
+}
+function drawHead() {
+  const c = cell;
+  const [cx, cy] = center(snake[0]);
+  const dx = direction[0], dy = direction[1];
+  const px = -dy, py = dx;         // 垂直于朝向
+  const r = c * 0.62;
+
+  // 小舌头（先画，根部被头盖住）
+  const tip = r * 1.45, fork = r * 0.26;
+  const mx = cx + dx * tip * 0.85, my = cy + dy * tip * 0.85;
+  const ex = cx + dx * tip, ey = cy + dy * tip;
+  line(cx + dx * r * 0.7, cy + dy * r * 0.7, mx, my, COLOR_TONGUE, 2);
+  line(mx, my, ex + px * fork, ey + py * fork, COLOR_TONGUE, 2);
+  line(mx, my, ex - px * fork, ey - py * fork, COLOR_TONGUE, 2);
+
+  // 脑袋
+  oval(cx, cy, r, r, COLOR_HEAD, COLOR_HEAD_EDGE, 2);
+  // 头顶柔光
+  oval(cx - r * 0.3, cy - r * 0.515, r * 0.25, r * 0.235, COLOR_SNAKE_BELLY);
+
+  // 大眼睛：白眼球 + 深瞳 + 高光小点
+  const er = c * 0.19;
+  for (const sign of [1, -1]) {
+    const ox = cx + dx * r * 0.30 + px * r * 0.42 * sign;
+    const oy = cy + dy * r * 0.30 + py * r * 0.42 * sign;
+    oval(ox, oy, er, er, COLOR_EYE, COLOR_HEAD_EDGE, 1);
+    const pr = er * 0.6;
+    const gx = ox + dx * er * 0.30, gy = oy + dy * er * 0.30;
+    oval(gx, gy, pr, pr, COLOR_PUPIL);
+    const sr = er * 0.22;
+    oval(gx - er * 0.25, gy - er * 0.30, sr, sr, COLOR_EYE);
+  }
+  // 腮红
+  for (const sign of [1, -1]) {
+    const bx = cx - dx * r * 0.18 + px * r * 0.72 * sign;
+    const by = cy - dy * r * 0.18 + py * r * 0.72 * sign;
+    oval(bx, by, r * 0.26, r * 0.26 * 0.75, COLOR_CHEEK);
+  }
+}
+
+function roundedCard(padXRatio, padYRatio, radRatio) {
+  const padX = cv.width * padXRatio, padY = cv.height * padYRatio;
+  const x0 = cv.width / 2 - padX, y0 = cv.height / 2 - padY;
+  const rad = cell * (radRatio || 0.055) * 2;
+  roundRectPath(x0, y0, padX * 2, padY * 2, rad);
+  ctx.save();
+  ctx.fillStyle = COLOR_CARD; ctx.fill();
+  ctx.strokeStyle = COLOR_CARD_EDGE; ctx.lineWidth = 2; ctx.stroke();
+  ctx.restore();
+}
+function drawMenu() {
+  roundedCard(0.325, 0.295);
+  const cx = cv.width / 2, cy = cv.height / 2;
+  text("贪吃蛇", cx, cy - cv.height * 0.165, 30, true, COLOR_TEXT);
+  text("莫兰迪小吃街，开饭啦～", cx, cy - cv.height * 0.055, 12, false, COLOR_HINT);
+  text("方向键转向 · 空格暂停 · 每 50 分提速", cx, cy + cv.height * 0.23, 10, false, COLOR_HINT);
+}
+function drawOverCard() {
+  roundedCard(0.217, 0.165);
+  const cx = cv.width / 2, cy = cv.height / 2;
+  text(gameOverReason, cx, cy - cv.height * 0.075, 18, true, COLOR_TEXT);
+  text("得分: " + score, cx, cy + cv.height * 0.005, 14, false, COLOR_TEXT);
+  text("按回车再来一局", cx, cy + cv.height * 0.085, 12, false, COLOR_HINT);
+}
+
+function draw() {
+  drawGrid();
+  drawObstacles();
+  drawFood();
+  drawSnake();
+
+  if (eatFlash) {
+    const [cx, cy] = center(eatFlash.cell);
+    text(eatFlash.text, cx, cy - cell * 0.95, 10, true, COLOR_TEXT);
+  }
+  if (state === "menu") {
+    drawMenu();
+  } else if (gameOver) {
+    drawOverCard();
+  } else if (paused) {
+    text("已暂停（按空格继续）", cv.width / 2, cv.height / 2, 20, true, COLOR_TEXT);
+  } else if (!moved) {
+    text("方向键 / WASD 转向，空格暂停；每 50 分提速并新增障碍块",
+         cv.width / 2, cv.height - 18, 11, false, COLOR_HINT);
+  }
+}
+
+// ---------------- 流程控制 ----------------
+function startGame() {
+  state = "playing";
+  btnStart.style.display = "none";
+  reset();
+  draw();
+  wrap.focus();
+}
+function quitGame() {
+  if (window.confirm("确定要退出贪吃蛇吗？")) {
+    state = "menu";
+    btnStart.style.display = "";
+    reset();
+    draw();
+  }
+}
+function showRules() { rulesMask.style.display = "flex"; }
+function hideRules() { rulesMask.style.display = "none"; wrap.focus(); }
+
+// ---------------- 输入 ----------------
+const KEY_DIRS = {
+  ArrowUp: [0, -1], w: [0, -1], W: [0, -1],
+  ArrowDown: [0, 1], s: [0, 1], S: [0, 1],
+  ArrowLeft: [-1, 0], a: [-1, 0], A: [-1, 0],
+  ArrowRight: [1, 0], d: [1, 0], D: [1, 0],
+};
+window.addEventListener("keydown", (e) => {
+  const k = e.key;
+  // 阻止方向键 / 空格滚动外层页面
+  if (k === " " || k.startsWith("Arrow")) e.preventDefault();
+
+  if (rulesMask.style.display === "flex") {
+    if (k === "Escape" || k === "Enter") hideRules();
+    return;
+  }
+  if (k === "Escape") { quitGame(); return; }
+  if (k === "=" || k === "+") { changeZoom(+ZOOM_STEP); return; }
+  if (k === "-" || k === "_") { changeZoom(-ZOOM_STEP); return; }
+
+  if (state === "menu") {
+    if (k === "Enter") startGame();
+    return;
+  }
+  if (gameOver) {
+    if (k === "Enter") startGame();
+    return;
+  }
+  if (k === " ") {
+    paused = !paused;
+    draw();
+    return;
+  }
+  const dir = KEY_DIRS[k];
+  if (!dir) return;
+  // 禁止 180 度掉头
+  if (dir[0] === -direction[0] && dir[1] === -direction[1]) return;
+  nextDirection = dir;
+});
+
+// ---------------- 按钮 ----------------
+btnStart.addEventListener("click", startGame);
+document.getElementById("btnQuit").addEventListener("click", quitGame);
+document.getElementById("btnRules").addEventListener("click", showRules);
+document.getElementById("btnRulesOk").addEventListener("click", hideRules);
+rulesMask.addEventListener("click", (e) => { if (e.target === rulesMask) hideRules(); });
+document.getElementById("btnZoomIn").addEventListener("click", () => changeZoom(+ZOOM_STEP));
+document.getElementById("btnZoomOut").addEventListener("click", () => changeZoom(-ZOOM_STEP));
+wrap.addEventListener("click", () => wrap.focus());
+
+// ---------------- 启动 ----------------
+reset();
+applyZoom();
+draw();
+setTimeout(tick, speedMs());
+window.addEventListener("load", () => { wrap.focus(); fitToWindow(); });
+wrap.focus();
+</script>
+</body>
+</html>

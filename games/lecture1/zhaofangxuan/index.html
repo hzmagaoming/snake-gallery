@@ -1,0 +1,1683 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>贪吃蛇 · 主题版</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #0A0A14;
+    overflow: hidden;
+  }
+  body {
+    display: flex; align-items: center; justify-content: center;
+  }
+  #frame {
+    background: #2A2A48;
+    padding: 2px;
+    border-radius: 4px;
+  }
+  canvas {
+    display: block;
+    outline: none;
+    cursor: crosshair;
+  }
+</style>
+</head>
+<body>
+<div id="frame"><canvas id="game" width="1040" height="700" tabindex="0"></canvas></div>
+<script>
+"use strict";
+/* 贪吃蛇 · 主题版 v15 —— HTML5 Canvas 移植（原作：赵芳萱，tkinter+PIL） */
+
+// ==================== 全局参数 ====================
+const W = 1040, H = 700, MARGIN = 16;
+const SNAKE_SPEED = 160;
+const TURN_SPEED = Math.PI * 4; // 720°/s
+const INIT_BODY_LEN = 170;
+const GROW_PER_FOOD = 26;
+const BODY_THICKNESS = 24;
+const FOOD_SCORE = 10;
+const FOOD_RADIUS = 14;
+const CONSTELLATION_SIZE = 5;
+
+const ACCENT = "#FFC766";
+const ACCENT_GLOW = [255, 199, 102];
+const ACCENT_TEXT = "#FFF3D6";
+const TEXT_DIM = "#7A7A96";
+const CARD_BG = [20, 20, 36];
+const CARD_EDGE = [44, 44, 72];
+
+const FLOWER_COLORS = [
+  [255,120,160],[255,190,90],[200,130,230],
+  [255,230,120],[130,200,240],[255,160,200],
+];
+
+const FLOWER_VARIANTS = [
+  {name:"rose",         petal:[222,78,100],  petal2:[172,40,62],  center:[255,218,200]},
+  {name:"sakura",       petal:[255,182,200], petal2:[240,138,165],center:[255,230,235]},
+  {name:"peach",        petal:[255,155,175], petal2:[235,115,140],center:[255,220,200]},
+  {name:"chinese_rose", petal:[235,100,140], petal2:[200,65,105], center:[255,215,220]},
+  {name:"lily",         petal:[255,250,240], petal2:[240,225,200],center:[255,210,120]},
+  {name:"daisy",        petal:[255,255,250], petal2:[240,240,235],center:[255,210,80]},
+];
+
+const DESSERTS = [
+  {name:"草莓蛋糕",     kind:"cake",     color:[255,130,160], accent:[255,205,220]},
+  {name:"巧克力甜甜圈", kind:"donut",    color:[168,102,68],  accent:[240,200,160]},
+  {name:"抹茶马卡龙",   kind:"macaron",  color:[132,198,122], accent:[228,245,210]},
+  {name:"蓝莓冰淇淋",   kind:"icecream", color:[150,165,232], accent:[222,228,252]},
+  {name:"芒果布丁",     kind:"pudding",  color:[255,192,82],  accent:[255,233,178]},
+  {name:"葡萄果冻",     kind:"jelly",    color:[190,140,220], accent:[235,215,248]},
+];
+
+const THEME_NAMES = ["音符蛇", "花园蛇", "甜品蛇", "星星蛇"];
+
+const THEME_ART = {
+  "音符蛇": {c_head:"#FFFFFF", c1:"#FCFCFC", c2:"#EEEEEE", c3:"#C8C8C8",
+    hint:"#5A4A6A", hud_bg:[252,248,238], hud_outline:[150,130,180]},
+  "花园蛇": {c_head:"#CCF2E2", c1:"#A8E8CC", c2:"#7CD2AC", c3:"#4FB08E",
+    hint:"#266A58", hud_bg:[250,255,252], hud_outline:[130,200,175]},
+  "甜品蛇": {c_head:"#FFFFFF", c1:"#FFFDF9", c2:"#FFF3E4", c3:"#F3DCC0",
+    hint:"#8A5A3A", hud_bg:[255,252,246], hud_outline:[225,190,150]},
+  "星星蛇": {c_head:"#F0F5FF", c1:"#D8E4FF", c2:"#A8BCE8", c3:"#7088B8",
+    hint:"#C8D8F8", hud_bg:[28,38,68], hud_outline:[100,130,200]},
+};
+
+// ==================== 工具 ====================
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hex2rgb(h) {
+  h = h.replace("#", "");
+  return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+}
+function lerpC(c1, c2, t) {
+  if (t <= 0) return c1;
+  if (t >= 1) return c2;
+  return [0,1,2].map(i => Math.round(c1[i] + (c2[i]-c1[i]) * t));
+}
+function rgba(c, a) {
+  if (a === undefined) a = 255;
+  return `rgba(${c[0]},${c[1]},${c[2]},${a/255})`;
+}
+function fnt(size, bold) {
+  return `${bold ? "bold " : ""}${size}px "PingFang SC","Microsoft YaHei","Hiragino Sans GB","Noto Sans CJK SC",sans-serif`;
+}
+function rr(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) { ctx.roundRect(x, y, w, h, r); return; }
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y, x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r);
+  ctx.arcTo(x, y, x+w, y, r);
+  ctx.closePath();
+}
+function ell(ctx, cx, cy, rx, ry, fill, outline, lw) {
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx, ry === undefined ? rx : ry, 0, 0, Math.PI*2);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (outline) { ctx.strokeStyle = outline; ctx.lineWidth = lw || 1; ctx.stroke(); }
+}
+function poly(ctx, pts, fill) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+}
+function line(ctx, x0, y0, x1, y1, color, lw) {
+  ctx.beginPath();
+  ctx.moveTo(x0, y0); ctx.lineTo(x1, y1);
+  ctx.strokeStyle = color; ctx.lineWidth = lw || 1;
+  ctx.stroke();
+}
+function starPath(ctx, cx, cy, r, rot, points) {
+  rot = rot || 0; points = points || 5;
+  const inner = r * 0.42;
+  ctx.beginPath();
+  for (let i = 0; i < points * 2; i++) {
+    const ang = -Math.PI/2 + i * Math.PI / points + rot;
+    const rr_ = (i % 2 === 0) ? r : inner;
+    const x = cx + Math.cos(ang) * rr_, y = cy + Math.sin(ang) * rr_;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+function drawStarShape(ctx, cx, cy, r, color, rot) {
+  starPath(ctx, cx, cy, r, rot);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+// ==================== 蛇 ====================
+class Snake {
+  constructor(x, y, angle) {
+    this.x = x; this.y = y; this.angle = angle;
+    this.speed = SNAKE_SPEED;
+    this.max_path_len = INIT_BODY_LEN;
+    const dx = Math.cos(angle), dy = Math.sin(angle);
+    this.path = [];
+    let total = 0;
+    while (total < INIT_BODY_LEN) {
+      this.path.push([x - dx * total, y - dy * total]);
+      total += 3.0;
+    }
+    this.total_path_len = total;
+  }
+  rotateTowards(target, dt) {
+    let diff = (target - this.angle + Math.PI) % (2*Math.PI);
+    if (diff < 0) diff += 2*Math.PI;
+    diff -= Math.PI;
+    const step = TURN_SPEED * dt;
+    if (Math.abs(diff) <= step) this.angle = target;
+    else this.angle += Math.sign(diff) * step;
+  }
+  move(dt) {
+    const dx = Math.cos(this.angle) * this.speed * dt;
+    const dy = Math.sin(this.angle) * this.speed * dt;
+    this.x += dx; this.y += dy;
+    this.path.unshift([this.x, this.y]);
+    this.total_path_len += Math.hypot(dx, dy);
+    while (this.total_path_len > this.max_path_len + 22 && this.path.length > 1) {
+      const old = this.path.pop();
+      const no = this.path[this.path.length - 1];
+      this.total_path_len -= Math.hypot(old[0]-no[0], old[1]-no[1]);
+    }
+  }
+  bodyPoints(spacing) {
+    spacing = spacing || 2;
+    const pts = [[this.x, this.y]];
+    const path = this.path;
+    if (path.length < 2) return pts;
+    let nextT = spacing, acc = 0;
+    for (let i = 0; i < path.length - 1; i++) {
+      const p0 = path[i], p1 = path[i+1];
+      const seg = Math.hypot(p1[0]-p0[0], p1[1]-p0[1]);
+      if (seg <= 0) continue;
+      const end = acc + seg;
+      while (nextT <= end) {
+        const t = (nextT - acc) / seg;
+        pts.push([p0[0] + (p1[0]-p0[0]) * t, p0[1] + (p1[1]-p0[1]) * t]);
+        nextT += spacing;
+        if (pts.length > 2200) return pts;
+      }
+      acc = end;
+    }
+    return pts;
+  }
+  hitsSelf() {
+    const headR = BODY_THICKNESS * 0.30;
+    const skip = BODY_THICKNESS * 2.8;
+    let acc = 0;
+    const path = this.path;
+    for (let i = 0; i < path.length - 1; i++) {
+      const p0 = path[i], p1 = path[i+1];
+      acc += Math.hypot(p1[0]-p0[0], p1[1]-p0[1]);
+      if (acc < skip) continue;
+      if (Math.hypot(p1[0]-this.x, p1[1]-this.y) < headR) return true;
+    }
+    return false;
+  }
+}
+
+// ==================== 游戏 ====================
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const game = {
+  state: "menu", // menu / playing / paused / over / quit
+  selectedIdx: 0,
+  themeName: THEME_NAMES[0],
+  score: 0,
+  targetAngle: 0,
+  followMouse: false,
+  mouseX: 0, mouseY: 0,
+  particles: [],
+  constellationPoints: [],
+  constellations: [],
+  extraStars: [],
+  spoonsLit: DESSERTS.map(() => false),
+  snake: null,
+  food: null,
+  cardBounds: [],
+  startBtn: null, menuQuitBtn: null,
+  restartBtn: null, quitBtn: null, overRestartBtn: null,
+  bgCache: {},
+};
+
+function buildBg(theme) {
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const d = c.getContext("2d");
+
+  function vignette(steps, maxA, pow_, col) {
+    col = col || [0,0,0];
+    for (let i = 0; i < steps; i++) {
+      const a = Math.round(maxA * Math.pow(1 - i/steps, pow_));
+      if (a <= 0) continue;
+      ctx_style(d, i, col, a);
+    }
+    function ctx_style(d, i, col, a) {
+      d.strokeStyle = rgba(col, a);
+      d.lineWidth = 1;
+      d.strokeRect(i + 0.5, i + 0.5, W - 1 - 2*i, H - 1 - 2*i);
+    }
+  }
+
+  if (theme === "音符蛇") {
+    d.fillStyle = "rgb(250,246,235)";
+    d.fillRect(0, 0, W, H);
+    const rng = mulberry32(Date.now() & 0xffff);
+    const lineGap = 12, groupGap = 110;
+    let y = 40;
+    while (y + 4 * lineGap < H) {
+      for (let i = 0; i < 5; i++) {
+        line(d, 24, y + i*lineGap, W - 24, y + i*lineGap, "rgba(85,82,92,0.51)", 1);
+      }
+      ell(d, 46, y + 2*lineGap, 5, 10, null, "rgba(90,80,100,0.43)", 1);
+      y += 5 * lineGap + groupGap;
+    }
+    for (let i = 0; i < 20; i++) {
+      const x = 40 + rng() * (W - 80);
+      const yg = 40 + rng() * (H - 80);
+      const r = 2 + rng() * 2;
+      ell(d, x, yg, r, r * 0.7, "rgba(90,80,100,0.24)");
+    }
+    vignette(90, 45, 1.6);
+  } else if (theme === "花园蛇") {
+    const g = d.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "rgb(246,238,224)");
+    g.addColorStop(1, "rgb(238,230,216)");
+    d.fillStyle = g;
+    d.fillRect(0, 0, W, H);
+    const rng = mulberry32(7);
+    for (let i = 0; i < 900; i++) {
+      const x = rng() * W, y = rng() * H;
+      const r = 1 + rng() * 2;
+      const sh = Math.round(-14 + rng() * 20);
+      ell(d, x, y, r, r, rgba([242+sh, 234+sh, 218+sh], 140));
+    }
+    for (let i = 0; i < 80; i++) {
+      const x = rng() * W, y = rng() * H;
+      const r = 2 + rng() * 3;
+      ell(d, x, y, r, r, "rgba(226,218,200,0.51)");
+    }
+    function drawGrass(x, y, length, color) {
+      const nB = 2 + Math.floor(rng() * 3);
+      for (let i = 0; i < nB; i++) {
+        const lean = Math.round(-4 + rng() * 8);
+        const l = length + Math.round(-4 + rng() * 8);
+        line(d, x, y, x + lean, y - l, color, 1);
+      }
+    }
+    const grassCol = "rgba(110,205,175,0.9)";
+    const grassCol2 = "rgba(86,188,158,0.86)";
+    for (let i = 0; i < 100; i++)
+      drawGrass(rng()*W, 8 + rng()*22, 10 + rng()*10, grassCol);
+    for (let i = 0; i < 100; i++)
+      drawGrass(rng()*W, H - (8 + rng()*22), 10 + rng()*10, grassCol);
+    for (let i = 0; i < 55; i++) {
+      const x = 8 + rng()*22, y = rng()*H;
+      line(d, x, y, x + 8 + rng()*8, y - 6 + rng()*12, grassCol2, 1);
+    }
+    for (let i = 0; i < 55; i++) {
+      const x = W - (8 + rng()*22), y = rng()*H;
+      line(d, x, y, x - (8 + rng()*8), y - 6 + rng()*12, grassCol2, 1);
+    }
+    const corners = [[0,0],[W,0],[0,H],[W,H]];
+    for (const [ccx, ccy] of corners) {
+      for (let i = 0; i < 38; i++) {
+        drawGrass(ccx - 80 + rng()*160, ccy - 80 + rng()*160,
+                  10 + rng()*14, grassCol2);
+      }
+    }
+    vignette(60, 22, 1.6);
+  } else if (theme === "甜品蛇") {
+    const g = d.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "rgb(255,240,246)");
+    g.addColorStop(1, "rgb(247,252,252)");
+    d.fillStyle = g;
+    d.fillRect(0, 0, W, H);
+    const rng = mulberry32(1073);
+    const blobCols = [
+      [255,200,220],[200,230,255],[215,250,220],[255,235,200],[235,210,255],
+    ];
+    for (let i = 0; i < 9; i++) {
+      const bx = -60 + rng() * (W + 120);
+      const by = -60 + rng() * (H + 120);
+      const br = 110 + rng() * 120;
+      const col = blobCols[Math.floor(rng() * blobCols.length)];
+      const rg = d.createRadialGradient(bx, by, 0, bx, by, br);
+      rg.addColorStop(0, rgba(col, 70));
+      rg.addColorStop(1, rgba(col, 0));
+      d.fillStyle = rg;
+      d.fillRect(bx - br, by - br, br*2, br*2);
+    }
+    const step = 42;
+    for (let gy = 0; gy <= H; gy += step) {
+      for (let gx = 0; gx <= W; gx += step) {
+        ell(d, gx, gy, 2, 2, "rgba(255,195,215,0.47)");
+        const ox = gx + step/2, oy = gy + step/2;
+        if (ox < W && oy < H)
+          ell(d, ox, oy, 1.3, 1.3, "rgba(185,215,240,0.43)");
+      }
+    }
+    for (let i = 0; i < 34; i++) {
+      const sx = rng() * W, sy = rng() * H;
+      const sr = 2 + rng() * 3;
+      const a = 120 + Math.floor(rng() * 80);
+      line(d, sx - sr, sy, sx + sr, sy, rgba([255,255,255], a), 1);
+      line(d, sx, sy - sr, sx, sy + sr, rgba([255,255,255], a), 1);
+    }
+    vignette(70, 20, 1.8, [180,140,160]);
+  } else { // 星星蛇
+    const g = d.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "rgb(6,10,28)");
+    g.addColorStop(1, "rgb(20,22,48)");
+    d.fillStyle = g;
+    d.fillRect(0, 0, W, H);
+    const rng = mulberry32(99);
+    const sizes = [1,1,2,2,3];
+    for (let i = 0; i < 180; i++) {
+      const x = rng() * W, y = rng() * H;
+      const sz = sizes[Math.floor(rng() * sizes.length)];
+      const a = 110 + Math.floor(rng() * 120);
+      ell(d, x, y, sz, sz, rgba([255,255,255], a));
+      if (sz >= 3) ell(d, x, y, sz*2, sz*2, "rgba(200,220,255,0.16)");
+    }
+    for (const cons of game.constellations) {
+      if (cons.length < 2) continue;
+      for (let i = 0; i < cons.length - 1; i++)
+        line(d, cons[i][0], cons[i][1], cons[i+1][0], cons[i+1][1],
+             "rgba(160,195,255,0.35)", 2);
+      for (const [px, py] of cons) {
+        for (let k = 10; k > 0; k--) {
+          const a = Math.round(120 * (1 - k/10));
+          if (a <= 0) continue;
+          ell(d, px, py, k, k, rgba([200,220,255], a));
+        }
+        ell(d, px, py, 4, 4, "rgb(255,255,255)");
+      }
+    }
+    for (const [x, y] of game.extraStars) {
+      for (let k = 8; k > 0; k--) {
+        const a = Math.round(110 * (1 - k/8));
+        if (a <= 0) continue;
+        ell(d, x, y, k, k, rgba([255,235,180], a));
+      }
+      ell(d, x, y, 3, 3, "rgb(255,250,220)");
+    }
+  }
+  return c;
+}
+
+function getBg(theme) {
+  if (!game.bgCache[theme]) game.bgCache[theme] = buildBg(theme);
+  return game.bgCache[theme];
+}
+function rebuildBg(theme) {
+  game.bgCache[theme] = buildBg(theme);
+}
+
+// ---------- 新游戏 ----------
+function newSnake() {
+  game.snake = new Snake(W/2 - 100, H/2, 0);
+  game.targetAngle = 0;
+  game.followMouse = false;
+  game.score = 0;
+  game.particles = [];
+  game.constellationPoints = [];
+  game.spoonsLit = DESSERTS.map(() => false);
+  game.food = placeFood();
+}
+
+function placeFood() {
+  const theme = game.themeName;
+  let kinds;
+  if (theme === "音符蛇") kinds = ["quarter", "eighth", "beamed"];
+  else if (theme === "花园蛇") kinds = ["flower", "grass"];
+  else if (theme === "甜品蛇") kinds = ["dessert"];
+  else kinds = ["star"];
+
+  const m = 70;
+  function makeFood(fx, fy) {
+    const d = {x: fx, y: fy, kind: kinds[Math.floor(Math.random()*kinds.length)]};
+    if (theme === "甜品蛇") d.variant = Math.floor(Math.random() * DESSERTS.length);
+    else if (theme === "花园蛇" && d.kind === "flower")
+      d.variant = Math.floor(Math.random() * FLOWER_VARIANTS.length);
+    return d;
+  }
+  for (let i = 0; i < 160; i++) {
+    const fx = m + Math.random() * (W - 2*m);
+    const fy = m + Math.random() * (H - 2*m);
+    let ok = true;
+    for (const [px, py] of game.snake.path) {
+      if (Math.hypot(px - fx, py - fy) < 90) { ok = false; break; }
+    }
+    if (ok) return makeFood(fx, fy);
+  }
+  return makeFood(m + Math.random()*(W-2*m), m + Math.random()*(H-2*m));
+}
+
+// ---------- 输入 ----------
+window.addEventListener("keydown", (e) => {
+  const k = e.key;
+  if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(k))
+    e.preventDefault();
+
+  if (game.state === "menu") {
+    const n = THEME_NAMES.length;
+    if (k === "ArrowLeft" || k === "a" || k === "A") selectTheme((game.selectedIdx - 1 + n) % n);
+    else if (k === "ArrowRight" || k === "d" || k === "D") selectTheme((game.selectedIdx + 1) % n);
+    else if (k === "ArrowUp" || k === "w" || k === "W") selectTheme((game.selectedIdx - 2 + n) % n);
+    else if (k === "ArrowDown" || k === "s" || k === "S") selectTheme((game.selectedIdx + 2) % n);
+    else if (k === " " || k === "Enter") startGame();
+    else if (k === "Escape") game.state = "quit";
+    return;
+  }
+  if (game.state === "quit") {
+    if (k) { game.state = "menu"; }
+    return;
+  }
+
+  if (k === "Escape") { backToMenu(); return; }
+  if (k === "r" || k === "R") { startGame(); return; }
+  if (k === " ") {
+    if (game.state === "over") startGame();
+    else if (game.state === "playing") game.state = "paused";
+    else if (game.state === "paused") game.state = "playing";
+    return;
+  }
+  if (game.state !== "playing") return;
+
+  let moved = false;
+  if (k === "ArrowUp" || k === "w" || k === "W") { game.targetAngle = -Math.PI/2; moved = true; }
+  else if (k === "ArrowDown" || k === "s" || k === "S") { game.targetAngle = Math.PI/2; moved = true; }
+  else if (k === "ArrowLeft" || k === "a" || k === "A") { game.targetAngle = Math.PI; moved = true; }
+  else if (k === "ArrowRight" || k === "d" || k === "D") { game.targetAngle = 0; moved = true; }
+  if (moved) game.followMouse = false;
+});
+
+function canvasPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height];
+}
+canvas.addEventListener("mousemove", (e) => {
+  const [x, y] = canvasPos(e);
+  game.mouseX = x; game.mouseY = y;
+});
+canvas.addEventListener("mousedown", (e) => {
+  canvas.focus();
+  const [x, y] = canvasPos(e);
+  onClick(x, y);
+});
+canvas.addEventListener("touchstart", (e) => {
+  canvas.focus();
+  const t = e.touches[0];
+  const [x, y] = canvasPos(t);
+  onClick(x, y);
+  e.preventDefault();
+}, {passive: false});
+canvas.addEventListener("touchmove", (e) => {
+  const t = e.touches[0];
+  const [x, y] = canvasPos(t);
+  game.mouseX = x; game.mouseY = y;
+  e.preventDefault();
+}, {passive: false});
+
+function inB(b, x, y) { return b && x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]; }
+
+function onClick(x, y) {
+  if (game.state === "quit") { game.state = "menu"; return; }
+  if (game.state === "menu") {
+    for (let i = 0; i < game.cardBounds.length; i++) {
+      if (inB(game.cardBounds[i], x, y)) { selectTheme(i); return; }
+    }
+    if (inB(game.startBtn, x, y)) { startGame(); return; }
+    if (inB(game.menuQuitBtn, x, y)) { game.state = "quit"; return; }
+    return;
+  }
+  if (game.state === "over" && inB(game.overRestartBtn, x, y)) { startGame(); return; }
+
+  if (["playing","paused","over"].includes(game.state)) {
+    if (inB(game.restartBtn, x, y)) { startGame(); return; }
+    if (inB(game.quitBtn, x, y)) { backToMenu(); return; }
+  }
+  if (game.state === "playing") {
+    game.mouseX = x; game.mouseY = y;
+    const dx = x - game.snake.x, dy = y - game.snake.y;
+    if (dx*dx + dy*dy > 64) {
+      game.targetAngle = Math.atan2(dy, dx);
+      game.followMouse = true;
+    }
+  }
+}
+
+function selectTheme(i) {
+  game.selectedIdx = i;
+  game.themeName = THEME_NAMES[i];
+  getBg(game.themeName);
+}
+function startGame() {
+  game.themeName = THEME_NAMES[game.selectedIdx];
+  game.state = "playing";
+  game.constellationPoints = [];
+  game.constellations = [];
+  game.extraStars = [];
+  rebuildBg(game.themeName);
+  newSnake();
+}
+function backToMenu() {
+  game.state = "menu";
+  game.followMouse = false;
+  game.particles = [];
+  game.themeName = THEME_NAMES[game.selectedIdx];
+  getBg(game.themeName);
+}
+
+// ---------- 更新 ----------
+function update(dt) {
+  if (game.state !== "playing") { updateParticles(dt); return; }
+
+  if (game.followMouse) {
+    const dx = game.mouseX - game.snake.x, dy = game.mouseY - game.snake.y;
+    if (dx*dx + dy*dy > 36) game.targetAngle = Math.atan2(dy, dx);
+  }
+  game.snake.rotateTowards(game.targetAngle, dt);
+  game.snake.move(dt);
+  updateParticles(dt);
+
+  const s = game.snake;
+  if (s.x < MARGIN || s.x > W - MARGIN || s.y < MARGIN || s.y > H - MARGIN) {
+    game.state = "over"; return;
+  }
+  if (s.hitsSelf()) { game.state = "over"; return; }
+
+  if (game.food) {
+    const fx = game.food.x, fy = game.food.y;
+    if (Math.hypot(fx - s.x, fy - s.y) < 28) {
+      s.max_path_len += GROW_PER_FOOD;
+      spawnEffect(fx, fy);
+      if (game.themeName === "甜品蛇") {
+        game.spoonsLit[game.food.variant || 0] = true;
+        game.score += FOOD_SCORE;
+      } else if (game.themeName === "星星蛇") {
+        game.score += FOOD_SCORE;
+        game.constellationPoints.push([fx, fy]);
+        if (game.constellationPoints.length >= CONSTELLATION_SIZE) {
+          game.constellations.push(game.constellationPoints.slice());
+          game.constellationPoints = [];
+          game.extraStars.push([60 + Math.random()*(W-120), 60 + Math.random()*(H-120)]);
+          rebuildBg("星星蛇");
+        }
+      } else {
+        game.score += FOOD_SCORE;
+      }
+      game.food = placeFood();
+    }
+  }
+}
+
+function updateParticles(dt) {
+  const alive = [];
+  for (const p of game.particles) {
+    p.life -= dt;
+    if (p.life <= 0) continue;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    if (p.type === "note") {
+      p.vy *= 0.985; p.vx *= 0.985;
+    } else if (p.type === "petal") {
+      p.vy += 90 * dt; p.vx *= 0.98;
+      p.rot += p.rotSpeed * dt;
+      p.vx += Math.sin(p.life * 6) * 22 * dt;
+    } else if (p.type === "star") {
+      p.vx *= 0.96; p.vy *= 0.96;
+      p.rot += p.rotSpeed * dt;
+    } else if (p.type === "sprinkle") {
+      p.vy += 260 * dt; p.vx *= 0.99;
+      p.rot += p.rotSpeed * dt;
+    }
+    alive.push(p);
+  }
+  game.particles = alive;
+}
+
+function spawnEffect(x, y) {
+  const theme = game.themeName;
+  const R = Math.random;
+  if (theme === "音符蛇") {
+    for (let i = 0; i < 8; i++) {
+      const ang = -Math.PI*0.85 + R() * Math.PI*0.7;
+      const sp = 50 + R() * 60;
+      const kinds = ["quarter","eighth","beamed"];
+      game.particles.push({type:"note", x, y,
+        vx: Math.cos(ang)*sp, vy: Math.sin(ang)*sp,
+        life:1.6, maxLife:1.6,
+        kind: kinds[Math.floor(R()*3)], size: 0.7 + R()*0.5});
+    }
+  } else if (theme === "花园蛇") {
+    for (let i = 0; i < 11; i++) {
+      const ang = R() * 2*Math.PI, sp = 60 + R()*90;
+      game.particles.push({type:"petal", x, y,
+        vx: Math.cos(ang)*sp, vy: Math.sin(ang)*sp - 40,
+        life:1.7, maxLife:1.7,
+        color: FLOWER_COLORS[Math.floor(R()*FLOWER_COLORS.length)],
+        size: 4 + R()*3, rot: R()*2*Math.PI, rotSpeed: -4 + R()*8});
+    }
+    for (let i = 0; i < 6; i++) {
+      const ang = R() * 2*Math.PI, sp = 80 + R()*100;
+      game.particles.push({type:"petal", x, y,
+        vx: Math.cos(ang)*sp, vy: Math.sin(ang)*sp - 60,
+        life:1.3, maxLife:1.3, color:[110,200,160],
+        size: 3 + R()*2, rot: R()*2*Math.PI, rotSpeed: -6 + R()*12});
+    }
+  } else if (theme === "甜品蛇") {
+    const cols = [[255,130,160],[255,200,90],[140,200,240],[185,150,230],[140,210,160],[255,170,120]];
+    for (let i = 0; i < 16; i++) {
+      const ang = R() * 2*Math.PI, sp = 60 + R()*120;
+      game.particles.push({type:"sprinkle", x, y,
+        vx: Math.cos(ang)*sp, vy: Math.sin(ang)*sp - 50,
+        life:1.4, maxLife:1.4,
+        size: 3 + R()*3, rot: R()*Math.PI, rotSpeed: -9 + R()*18,
+        color: cols[Math.floor(R()*cols.length)]});
+    }
+  } else {
+    const cols = [[255,245,200],[255,220,150],[220,235,255],[255,255,230]];
+    for (let i = 0; i < 12; i++) {
+      const ang = R() * 2*Math.PI, sp = 60 + R()*100;
+      game.particles.push({type:"star", x, y,
+        vx: Math.cos(ang)*sp, vy: Math.sin(ang)*sp,
+        life:1.5, maxLife:1.5,
+        size: 4 + R()*5, rot: R()*Math.PI, rotSpeed: -3 + R()*6,
+        color: cols[Math.floor(R()*cols.length)]});
+    }
+  }
+}
+
+// ==================== 渲染 ====================
+function render() {
+  if (game.state === "menu") renderMenu();
+  else if (game.state === "quit") renderQuit();
+  else renderGame();
+}
+
+// ---------- 菜单 ----------
+function renderMenu() {
+  ctx.fillStyle = "#0B0B16";
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = "rgb(17,17,34)";
+  ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 60) line(ctx, x, 0, x, H, "rgb(17,17,34)", 1);
+  for (let y = 0; y < H; y += 60) line(ctx, 0, y, W, y, "rgb(17,17,34)", 1);
+
+  const cx = W / 2;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.save();
+  ctx.shadowColor = ACCENT;
+  ctx.shadowBlur = 22;
+  ctx.fillStyle = ACCENT;
+  ctx.font = fnt(56, true);
+  ctx.fillText("贪 吃 蛇", cx, 56);
+  ctx.fillText("贪 吃 蛇", cx, 56);
+  ctx.restore();
+  ctx.fillStyle = TEXT_DIM;
+  ctx.font = fnt(15);
+  ctx.fillText("选择你的主题", cx, 96);
+
+  const cols = 2, cardW = 360, cardH = 220, gap = 34;
+  const gw = cols * cardW + gap;
+  const gh = 2 * cardH + gap;
+  const sx = (W - gw) / 2, sy = 130;
+
+  game.cardBounds = [];
+  for (let i = 0; i < THEME_NAMES.length; i++) {
+    const name = THEME_NAMES[i];
+    const col = i % cols, row = Math.floor(i / cols);
+    const x = sx + col * (cardW + gap);
+    const y = sy + row * (cardH + gap);
+    game.cardBounds.push([x, y, x + cardW, y + cardH]);
+    const selected = (i === game.selectedIdx);
+
+    if (selected) {
+      for (let k = 8; k > 0; k--) {
+        const a = Math.round(95 * (1 - k/8));
+        if (a <= 0) continue;
+        rr(ctx, x-k, y-k, cardW+2*k, cardH+2*k, 22+k);
+        ctx.strokeStyle = rgba(ACCENT_GLOW, a);
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+    rr(ctx, x, y, cardW, cardH, 22);
+    ctx.fillStyle = rgba(CARD_BG);
+    ctx.fill();
+    ctx.strokeStyle = selected ? ACCENT : rgba(CARD_EDGE);
+    ctx.lineWidth = selected ? 3 : 2;
+    ctx.stroke();
+
+    drawThemePreview(x, y, cardW, cardH, name);
+
+    ctx.fillStyle = selected ? "#FFFFFF" : TEXT_DIM;
+    ctx.font = fnt(19, selected);
+    ctx.fillText(name, x + cardW/2, y + cardH - 26);
+  }
+
+  const byBase = sy + gh + 30;
+  const btnH = 54;
+  const startW = 240;
+  const sx0 = (W - startW) / 2, sy0 = byBase;
+  game.startBtn = [sx0, sy0, sx0 + startW, sy0 + btnH];
+
+  for (let k = 9; k > 0; k--) {
+    const a = Math.round(95 * (1 - k/9));
+    if (a <= 0) continue;
+    rr(ctx, sx0-k, sy0-k, startW+2*k, btnH+2*k, 16+k);
+    ctx.strokeStyle = rgba(ACCENT_GLOW, a);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  rr(ctx, sx0, sy0, startW, btnH, 16);
+  ctx.fillStyle = "rgb(64,46,20)";
+  ctx.fill();
+  ctx.strokeStyle = ACCENT;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = ACCENT_TEXT;
+  ctx.font = fnt(21, true);
+  ctx.fillText("开 始 游 戏", sx0 + startW/2, sy0 + btnH/2);
+
+  const qx0 = sx0 + startW + 24;
+  game.menuQuitBtn = [qx0, sy0, qx0 + 120, sy0 + btnH];
+  drawHudButton(qx0, sy0, qx0 + 120, sy0 + btnH, "退 出", "quit", 18);
+
+  ctx.fillStyle = TEXT_DIM;
+  ctx.font = fnt(13);
+  ctx.fillText("← → ↑ ↓  切换主题      空格 / 回车  开始      ESC  退出", cx, 620);
+}
+
+function drawHudButton(x0, y0, x1, y1, label, style, size) {
+  let fill, outline, textCol;
+  if (style === "restart") {
+    fill = "rgb(233,246,243)"; outline = "rgb(120,185,165)"; textCol = "rgb(30,90,72)";
+  } else {
+    fill = "rgb(252,238,238)"; outline = "rgb(222,162,162)"; textCol = "rgb(150,60,60)";
+  }
+  rr(ctx, x0+1, y0+2, x1-x0, y1-y0, 11);
+  ctx.fillStyle = "rgba(0,0,0,0.16)";
+  ctx.fill();
+  rr(ctx, x0, y0, x1-x0, y1-y0, 11);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.strokeStyle = outline;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  line(ctx, x0+6, y0+1, x1-6, y0+1, "rgba(255,255,255,0.7)", 1);
+  ctx.fillStyle = textCol;
+  ctx.font = fnt(size, true);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, (x0+x1)/2, (y0+y1)/2);
+}
+
+// ---------- 菜单主题预览 ----------
+function drawThemePreview(x, y, cw, ch, name) {
+  const art = THEME_ART[name];
+  const pad = 14;
+  const px0 = x + pad, py0 = y + pad;
+  const px1 = x + cw - pad, py1 = y + ch - pad - 36;
+
+  ctx.save();
+  rr(ctx, px0, py0, px1-px0, py1-py0, 14);
+  ctx.clip();
+
+  if (name === "音符蛇") {
+    ctx.fillStyle = "rgb(250,246,235)";
+    ctx.fillRect(px0, py0, px1-px0, py1-py0);
+    const lg = 6;
+    const y0 = py0 + 14;
+    for (let grp = 0; grp < 2; grp++) {
+      for (let i = 0; i < 5; i++) {
+        const ly = y0 + i*lg + grp * (5*lg + 18);
+        if (ly > py1 - 6) continue;
+        line(ctx, px0+10, ly, px1-10, ly, "rgba(85,82,92,0.51)", 1);
+      }
+    }
+    drawNote(ctx, (px1+px0)/2 - 46, (py1+py0)/2 + 8, "eighth", "rgb(30,30,35)", FOOD_RADIUS*0.7);
+  } else if (name === "花园蛇") {
+    ctx.fillStyle = "rgb(242,234,218)";
+    ctx.fillRect(px0, py0, px1-px0, py1-py0);
+    const rng = mulberry32(3);
+    for (let i = 0; i < 80; i++) {
+      const rx = px0 + rng()*(px1-px0), ry = py0 + rng()*(py1-py0);
+      const r = 1 + rng();
+      const sh = Math.round(-10 + rng()*15);
+      ell(ctx, rx, ry, r, r, rgba([242+sh, 234+sh, 218+sh], 160));
+    }
+    for (let i = 0; i < 22; i++) {
+      const rx = px0 + rng()*(px1-px0);
+      const ry = py0 + 2 + rng()*10;
+      const l = 6 + rng()*6;
+      line(ctx, rx, ry+l, rx + Math.round(-3+rng()*6), ry, "rgba(110,205,175,0.9)", 1);
+    }
+    for (let i = 0; i < 18; i++) {
+      const rx = px0 + rng()*(px1-px0);
+      const ry = py1 - (2 + rng()*10);
+      const l = 6 + rng()*6;
+      line(ctx, rx, ry-l, rx + Math.round(-3+rng()*6), ry, "rgba(110,205,175,0.9)", 1);
+    }
+    drawFlowerRose(ctx, px1-40, py1-40, FOOD_RADIUS*0.85, FLOWER_VARIANTS[0]);
+  } else if (name === "甜品蛇") {
+    const cw_ = px1 - px0, ch_ = py1 - py0;
+    const g = ctx.createLinearGradient(0, py0, 0, py1);
+    g.addColorStop(0, "rgb(255,220,238)");
+    g.addColorStop(0.42, "rgb(245,238,246)");
+    g.addColorStop(0.72, "rgb(237,246,250)");
+    g.addColorStop(1, "rgb(231,242,240)");
+    ctx.fillStyle = g;
+    ctx.fillRect(px0, py0, cw_, ch_);
+    const rng = mulberry32(Math.round(px0)*31 + Math.round(py0)*17);
+    const blobs = [
+      [0.18,0.22,62,[255,200,225]],[0.82,0.26,55,[205,225,255]],
+      [0.26,0.80,52,[255,235,205]],[0.76,0.74,58,[215,245,225]],
+      [0.50,0.42,72,[240,215,250]],
+    ];
+    for (const [fx, fy, br, bc] of blobs) {
+      const bx = px0 + fx*cw_, by = py0 + fy*ch_;
+      const rg = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+      rg.addColorStop(0, rgba(bc, 26));
+      rg.addColorStop(1, rgba(bc, 0));
+      ctx.fillStyle = rg;
+      ctx.fillRect(bx-br, by-br, br*2, br*2);
+    }
+    for (let i = 0; i < 28; i++) {
+      const sx2 = px0 + 6 + rng()*(cw_-12);
+      const sy2 = py0 + 6 + rng()*(ch_-12);
+      const sr = 1.2 + rng()*1.6;
+      const a = 170 + Math.floor(rng()*60);
+      line(ctx, sx2-sr, sy2, sx2+sr, sy2, rgba([255,255,255], a), 1);
+      line(ctx, sx2, sy2-sr, sx2, sy2+sr, rgba([255,255,255], a), 1);
+      ell(ctx, sx2, sy2, sr*0.4, sr*0.4, rgba([255,255,255], a));
+    }
+    const spoonSize = FOOD_RADIUS * 0.72;
+    drawSpoon(ctx, px1-58, py0+34, spoonSize, DESSERTS[2], false);
+    drawSpoon(ctx, px1-30, py0+34, spoonSize, DESSERTS[0], true);
+    const dessertY = py1 - 26;
+    const nDes = 4, span = 40;
+    const marginX = (cw_ - nDes*span) / 2;
+    const order = [1, 0, 3, 2];
+    for (let i = 0; i < order.length; i++) {
+      drawDessert(ctx, px0 + marginX + (i+0.5)*span, dessertY, FOOD_RADIUS*0.65, order[i]);
+    }
+  } else { // 星星蛇
+    ctx.fillStyle = "rgb(10,14,34)";
+    ctx.fillRect(px0, py0, px1-px0, py1-py0);
+    const rng = mulberry32(21);
+    const sizes = [1,1,2,2,3];
+    for (let i = 0; i < 35; i++) {
+      const sx2 = px0 + 8 + rng()*(px1-px0-16);
+      const sy2 = py0 + 8 + rng()*(py1-py0-16);
+      const ss = sizes[Math.floor(rng()*sizes.length)];
+      const aa = 140 + Math.floor(rng()*100);
+      ell(ctx, sx2, sy2, ss, ss, rgba([255,255,255], aa));
+    }
+    const stx = (px1+px0)/2 + 46, sty = (py1+py0)/2 + 8;
+    for (let k = 5; k > 0; k--) {
+      const a = Math.round(120 * (1 - k/5));
+      if (a <= 0) continue;
+      drawStarShape(ctx, stx, sty, FOOD_RADIUS + k*2, rgba([255,240,180], a));
+    }
+    drawStarShape(ctx, stx, sty, FOOD_RADIUS*1.16, "rgb(220,145,35)");
+    drawStarShape(ctx, stx, sty, FOOD_RADIUS*1.02, "rgb(255,195,70)");
+    drawStarShape(ctx, stx, sty, FOOD_RADIUS*0.60, "rgb(255,255,248)");
+  }
+
+  // 卡片中央的小蛇（四主题共用）
+  const scx = (px1+px0)/2, scy = (py1+py0)/2 - 10;
+  const width = (px1-px0) * 0.58;
+  const n = 54, thick = 13;
+  const cHead = hex2rgb(art.c_head), c1 = hex2rgb(art.c1),
+        c2 = hex2rgb(art.c2), c3 = hex2rgb(art.c3);
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / (n-1);
+    pts.push([scx + (t-0.5)*width, scy + Math.sin(t*Math.PI*2)*9]);
+  }
+  strokePath(pts, rgba(c2), thick);
+  const CH = 5;
+  for (let i = 0; i < n; i += CH) {
+    const j = Math.min(n-1, i+CH);
+    const t = ((i+j)/2) / (n-1);
+    const col = t < 0.45 ? lerpC(c1, c2, t/0.45) : lerpC(c2, c3, (t-0.45)/0.55);
+    strokePath(pts.slice(i, j+1), rgba(col), thick);
+  }
+  const [tx, ty] = pts[n-1];
+  ell(ctx, tx, ty, thick/2, thick/2, rgba(c3));
+  const hr = 11;
+  ell(ctx, tx, ty, hr, hr, rgba(cHead));
+  const pupilCol = [50,60,80];
+  for (const sgn of [-4, 4]) {
+    ell(ctx, tx-1, ty+sgn, 3, 3, "rgb(255,255,255)");
+    ell(ctx, tx+0.5, ty+sgn, 2, 2, rgba(pupilCol));
+    ell(ctx, tx-0.9, ty+sgn-0.8, 0.9, 0.9, "rgba(255,255,255,0.94)");
+  }
+  ctx.restore();
+}
+
+function strokePath(pts, color, width) {
+  if (pts.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.stroke();
+}
+
+// ---------- 退出画面 ----------
+function renderQuit() {
+  ctx.fillStyle = "#0A0A14";
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = ACCENT;
+  ctx.font = fnt(40, true);
+  ctx.fillText("游戏已退出", W/2, H/2 - 30);
+  ctx.fillStyle = TEXT_DIM;
+  ctx.font = fnt(17);
+  ctx.fillText("点击任意处或按任意键返回首页", W/2, H/2 + 26);
+}
+
+// ---------- 游戏渲染 ----------
+function renderGame() {
+  ctx.drawImage(getBg(game.themeName), 0, 0);
+  const art = THEME_ART[game.themeName];
+
+  if (game.themeName === "星星蛇" && game.constellationPoints.length) {
+    const pts = game.constellationPoints;
+    if (pts.length >= 2) {
+      for (let i = 0; i < pts.length - 1; i++)
+        line(ctx, pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1],
+             "rgba(180,210,255,0.39)", 2);
+    }
+    for (const [px, py] of pts) {
+      for (let k = 8; k > 0; k--) {
+        const a = Math.round(140 * (1 - k/8));
+        if (a <= 0) continue;
+        ell(ctx, px, py, k, k, rgba([220,235,255], a));
+      }
+      ell(ctx, px, py, 4, 4, "rgb(255,255,255)");
+    }
+  }
+
+  if (game.food) drawFood(game.food);
+
+  const pts = game.snake.bodyPoints(2);
+  if (pts.length >= 2) drawBody(pts, art);
+  drawHead(game.snake.x, game.snake.y, game.snake.angle, art);
+  drawParticles();
+
+  let borderCol = "rgba(100,100,130,0.78)";
+  if (game.themeName === "星星蛇") borderCol = "rgba(80,110,180,0.78)";
+  else if (game.themeName === "甜品蛇") borderCol = "rgba(230,180,200,0.86)";
+  else if (game.themeName === "花园蛇") borderCol = "rgba(170,215,195,0.78)";
+  ctx.strokeStyle = borderCol;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(MARGIN, MARGIN, W - 2*MARGIN, H - 2*MARGIN);
+
+  drawHud();
+
+  if (game.state === "paused") {
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = ACCENT;
+    ctx.font = fnt(54, true);
+    ctx.fillText("已暂停", W/2, H/2 - 16);
+    ctx.fillStyle = "#B8B8CC";
+    ctx.font = fnt(19);
+    ctx.fillText("按空格继续", W/2, H/2 + 46);
+  }
+
+  if (game.state === "over") {
+    ctx.fillStyle = "rgba(0,0,0,0.62)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = ACCENT;
+    ctx.font = fnt(58, true);
+    ctx.fillText("游戏结束", W/2, H/2 - 130);
+    ctx.fillStyle = "#FFFFFF";
+    ctx.font = fnt(30);
+    ctx.fillText(`得分  ${game.score}`, W/2, H/2 - 40);
+
+    const bw = 260, bh = 62;
+    const bx0 = (W - bw)/2, by0 = H/2 + 30;
+    game.overRestartBtn = [bx0, by0, bx0 + bw, by0 + bh];
+    drawHudButton(bx0, by0, bx0+bw, by0+bh, "重 新 开 始", "restart", 24);
+    ctx.fillStyle = "#B8B8CC";
+    ctx.font = fnt(16);
+    ctx.fillText("点击按钮  ·  或按 空格 / R  重新开始", W/2, by0 + bh + 40);
+  }
+
+  // 署名
+  ctx.textAlign = "right";
+  ctx.textBaseline = "bottom";
+  ctx.font = fnt(11);
+  ctx.fillStyle = game.themeName === "星星蛇" ? "rgba(200,216,248,0.55)" : "rgba(90,90,110,0.55)";
+  ctx.fillText("by 赵芳萱", W - 10, H - 6);
+}
+
+// ---------- 蛇身 ----------
+function drawBody(pts, art) {
+  const n = BODY_THICKNESS;
+  const total = pts.length;
+  const c1 = hex2rgb(art.c1), c2 = hex2rgb(art.c2), c3 = hex2rgb(art.c3);
+  function colAt(t) {
+    return t < 0.45 ? lerpC(c1, c2, t/0.45) : lerpC(c2, c3, (t-0.45)/0.55);
+  }
+  if (game.themeName === "星星蛇") {
+    const layers = [[5,30],[4,45],[3,60]];
+    for (const [layer, alpha] of layers)
+      strokePath(pts, rgba([180,210,255], alpha), n + layer*2);
+  }
+  if (game.themeName === "甜品蛇")
+    strokePath(pts, rgba([200,170,178], 65), n + 3.2);
+
+  strokePath(pts, rgba(c2), n);
+
+  const CH = 8;
+  for (let i = 0; i < total; i += CH) {
+    const j = Math.min(total - 1, i + CH);
+    const t = ((i + j) / 2) / Math.max(1, total - 1);
+    strokePath(pts.slice(i, j+1), rgba(colAt(t)), n);
+  }
+  const [tx, ty] = pts[total - 1];
+  ell(ctx, tx, ty, n/2, n/2, rgba(c3));
+}
+
+// ---------- 蛇头 ----------
+function drawHead(cx, cy, angle, art) {
+  const ca = Math.cos(angle), sa = Math.sin(angle);
+  const r = BODY_THICKNESS * 0.72;
+  const cHead = hex2rgb(art.c_head);
+
+  if (game.themeName === "星星蛇") {
+    for (let k = 8; k > 0; k--) {
+      const a = Math.round(50 * (1 - k/8));
+      if (a <= 0) continue;
+      ell(ctx, cx, cy, r + k, r + k, rgba([180,210,255], a));
+    }
+  } else if (game.themeName === "甜品蛇") {
+    for (let k = 6; k > 0; k--) {
+      const a = Math.round(40 * (1 - k/6));
+      if (a <= 0) continue;
+      ell(ctx, cx, cy, r + k, r + k, rgba([255,250,240], a));
+    }
+  }
+  ell(ctx, cx, cy, r, r, rgba(cHead));
+
+  const eyeSide = r * 0.46, eyeFwd = r * 0.30, eyeR = r * 0.30;
+  let pupilColor = [50,60,80];
+  if (game.themeName === "甜品蛇") pupilColor = [110,70,50];
+
+  for (const side of [-1, 1]) {
+    const px = -sa * side, py = ca * side;
+    const ex = cx + ca*eyeFwd + px*eyeSide;
+    const ey = cy + sa*eyeFwd + py*eyeSide;
+    ell(ctx, ex, ey, eyeR, eyeR*1.05, "rgb(255,255,255)");
+    const pr = eyeR * 0.62;
+    const ppx = ex + ca*eyeR*0.18, ppy = ey + sa*eyeR*0.18;
+    ell(ctx, ppx, ppy, pr, pr, rgba(pupilColor));
+    ell(ctx, ppx - pr*0.40, ppy - pr*0.50, pr*0.50, pr*0.50, "rgba(255,255,255,0.98)");
+    ell(ctx, ppx + pr*0.40, ppy + pr*0.40, pr*0.22, pr*0.22, "rgba(255,255,255,0.86)");
+  }
+}
+
+// ---------- 食物 ----------
+function drawFood(food) {
+  const fx = food.x, fy = food.y;
+  const theme = game.themeName;
+  if (theme === "音符蛇") {
+    drawNote(ctx, fx, fy, food.kind, "rgb(30,30,35)", FOOD_RADIUS);
+  } else if (theme === "花园蛇") {
+    if (food.kind === "flower") drawFlower(ctx, fx, fy, food.variant || 0);
+    else drawGrassBundle(ctx, fx, fy);
+  } else if (theme === "甜品蛇") {
+    drawDessert(ctx, fx, fy, FOOD_RADIUS, food.variant || 0);
+  } else {
+    drawStarFood(ctx, fx, fy);
+  }
+}
+
+function drawNote(ctx, cx, cy, kind, color, size) {
+  size = size || FOOD_RADIUS;
+  const headW = size * 1.25, headH = size * 0.9;
+  function drawHeadAt(hx, hy) {
+    ell(ctx, hx, hy, headW/2, headH/2, color);
+  }
+  if (kind === "quarter") {
+    drawHeadAt(cx, cy);
+    const stemX = cx + headW/2 - 2;
+    ctx.fillStyle = color;
+    ctx.fillRect(stemX, cy - size*1.7, 3, size*1.7);
+  } else if (kind === "eighth") {
+    drawHeadAt(cx, cy);
+    const stemX = cx + headW/2 - 2;
+    ctx.fillStyle = color;
+    ctx.fillRect(stemX, cy - size*1.7, 3, size*1.7);
+    const tail = [];
+    for (let i = 0; i <= 8; i++) {
+      const t = i / 8;
+      tail.push([stemX + 3 + t*size*0.8,
+                 cy - size*1.7 + Math.sin(t*Math.PI*0.8)*size*0.55]);
+    }
+    tail.push([stemX + 3, cy - size*1.7 + size*0.35]);
+    poly(ctx, tail, color);
+  } else {
+    const off = size * 1.0;
+    drawHeadAt(cx - off, cy);
+    drawHeadAt(cx + off, cy);
+    const s1x = cx - off + headW/2 - 2;
+    const s2x = cx + off + headW/2 - 2;
+    ctx.fillStyle = color;
+    ctx.fillRect(s1x, cy - size*1.7, 3, size*1.7);
+    ctx.fillRect(s2x, cy - size*1.7, 3, size*1.7);
+    ctx.fillRect(s1x, cy - size*1.7, s2x + 3 - s1x, size*0.4);
+  }
+}
+
+// ==================== 甜品绘制 ====================
+function drawDessert(ctx, cx, cy, r, idx) {
+  idx = idx % DESSERTS.length;
+  const info = DESSERTS[idx];
+  switch (info.kind) {
+    case "cake": return drawCake(ctx, cx, cy, r, info);
+    case "donut": return drawDonut(ctx, cx, cy, r, info);
+    case "macaron": return drawMacaron(ctx, cx, cy, r, info);
+    case "icecream": return drawIcecream(ctx, cx, cy, r, info);
+    case "pudding": return drawPudding(ctx, cx, cy, r, info);
+    default: return drawJelly(ctx, cx, cy, r, info);
+  }
+}
+function drawCake(ctx, cx, cy, r, info) {
+  const w = r*1.7, h = r*1.55;
+  ell(ctx, cx, cy + h*0.57, w*0.52, h*0.09, "rgba(190,160,128,0.35)");
+  rr(ctx, cx - w/2, cy - h*0.05, w, h*0.53, r*0.18);
+  ctx.fillStyle = "rgb(252,236,208)"; ctx.fill();
+  ctx.fillStyle = "rgb(255,190,200)";
+  ctx.fillRect(cx - w/2, cy + h*0.16, w, h*0.11);
+  rr(ctx, cx - w/2, cy - h*0.42, w, h*0.40, r*0.20);
+  ctx.fillStyle = rgba(info.color); ctx.fill();
+  for (let i = 0; i < 5; i++) {
+    const t = (i + 0.5) / 5;
+    ell(ctx, cx - w/2 + w*t, cy, r*0.14, h*0.06, rgba(info.color));
+  }
+  const sx = cx, sy = cy - h*0.52;
+  ell(ctx, sx, sy + r*0.02, r*0.26, r*0.28, "rgb(232,62,82)");
+  poly(ctx, [
+    [sx - r*0.22, sy - r*0.24], [sx, sy - r*0.42],
+    [sx + r*0.22, sy - r*0.24], [sx, sy - r*0.16],
+  ], "rgb(96,176,96)");
+  ell(ctx, sx - r*0.10, sy - r*0.08, r*0.06, r*0.06, "rgba(255,255,255,0.78)");
+}
+function drawSprinkleShape(ctx, cx, cy, size, rot, color) {
+  const w = size, h = size * 0.42;
+  const ca = Math.cos(rot), sa = Math.sin(rot);
+  const pts = [[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]].map(([dx,dy]) =>
+    [cx + dx*ca - dy*sa, cy + dx*sa + dy*ca]);
+  poly(ctx, pts, color);
+}
+function drawDonut(ctx, cx, cy, r, info) {
+  ell(ctx, cx, cy, r, r, "rgb(226,186,140)");
+  ell(ctx, cx, cy, r*0.94, r*0.94, rgba(info.color));
+  ell(ctx, cx, cy, r*0.36, r*0.36, "rgb(238,224,206)");
+  const spColors = [[255,255,255],[255,214,130],[255,150,180],[140,220,200],[200,170,255]];
+  const rng = mulberry32(Math.abs(Math.round(cx*7 + cy*13)) % 2147483647);
+  for (let i = 0; i < 14; i++) {
+    const ang = rng() * 2*Math.PI;
+    const rr_ = r * (0.48 + rng()*0.37);
+    const px = cx + Math.cos(ang)*rr_, py = cy + Math.sin(ang)*rr_;
+    drawSprinkleShape(ctx, px, py, r*0.22, rng()*Math.PI,
+      rgba(spColors[Math.floor(rng()*spColors.length)]));
+  }
+  ell(ctx, cx - r*0.51, cy - r*0.64, r*0.21, r*0.14, "rgba(255,255,255,0.27)");
+}
+function drawMacaron(ctx, cx, cy, r, info) {
+  const w = r*1.7, h = r*0.62;
+  ell(ctx, cx, cy + h*0.925, w/2, h*0.825, rgba(info.color));
+  rr(ctx, cx - w*0.44, cy - h*0.30, w*0.88, h*0.92, h*0.35);
+  ctx.fillStyle = rgba(info.accent); ctx.fill();
+  ell(ctx, cx, cy - h*0.725, w/2, h*1.025, rgba(info.color));
+  const dotCol = info.color.map(c => Math.max(0, c - 25));
+  for (let i = 0; i < 9; i++) {
+    const t = i / 8;
+    ell(ctx, cx - w*0.45 + w*0.90*t, cy + h*0.14, r*0.07, r*0.05, rgba(dotCol, 200));
+  }
+  ell(ctx, cx - w*0.165, cy - h*1.10, w*0.115, h*0.20, "rgba(255,255,255,0.51)");
+}
+function drawIcecream(ctx, cx, cy, r, info) {
+  poly(ctx, [
+    [cx - r*0.58, cy + r*0.10], [cx + r*0.58, cy + r*0.10], [cx, cy + r*1.25],
+  ], "rgb(226,176,116)");
+  for (let i = 0; i < 4; i++) {
+    const t = (i + 1) / 5;
+    const yy = cy + r*0.10 + r*1.15*t;
+    const hw = r*0.58*(1 - t);
+    line(ctx, cx - hw, yy, cx + hw, yy, "rgba(198,148,92,0.86)", 1);
+  }
+  for (let i = -2; i <= 2; i++) {
+    line(ctx, cx + i*r*0.22, cy + r*0.10, cx + i*r*0.08, cy + r*1.20,
+         "rgba(198,148,92,0.63)", 1);
+  }
+  ell(ctx, cx, cy - r*0.43, r*0.88, r*0.75, rgba(info.color));
+  ell(ctx, cx, cy - r*1.075, r*0.62, r*0.525, rgba(info.accent));
+  const berries = [[-0.5,-1.3],[0.45,-1.15],[0.0,-1.55],[-0.15,-0.95]];
+  for (const [ox, oy] of berries) {
+    const px = cx + ox*r, py = cy + oy*r;
+    ell(ctx, px, py, r*0.14, r*0.14, "rgb(86,96,176)");
+    ell(ctx, px - r*0.04, py - r*0.06, r*0.03, r*0.03, "rgba(210,220,255,0.86)");
+  }
+  ell(ctx, cx - r*0.385, cy - r*0.875, r*0.165, r*0.175, "rgba(255,255,255,0.59)");
+}
+function drawPudding(ctx, cx, cy, r, info) {
+  ell(ctx, cx, cy + r*0.86, r*0.92, r*0.16, "rgba(190,160,120,0.35)");
+  poly(ctx, [
+    [cx - r*0.62, cy - r*0.62], [cx + r*0.62, cy - r*0.62],
+    [cx + r*0.86, cy + r*0.82], [cx - r*0.86, cy + r*0.82],
+  ], rgba(info.color));
+  poly(ctx, [
+    [cx - r*0.62, cy - r*0.62], [cx + r*0.62, cy - r*0.62],
+    [cx + r*0.48, cy - r*0.28], [cx - r*0.48, cy - r*0.28],
+  ], "rgb(196,118,50)");
+  poly(ctx, [
+    [cx - r*0.30, cy - r*0.30], [cx - r*0.18, cy - r*0.30],
+    [cx - r*0.22, cy + r*0.16], [cx - r*0.30, cy + r*0.10],
+  ], "rgba(196,118,50,0.86)");
+  poly(ctx, [
+    [cx + r*0.14, cy - r*0.30], [cx + r*0.26, cy - r*0.30],
+    [cx + r*0.30, cy + r*0.30], [cx + r*0.18, cy + r*0.24],
+  ], "rgba(196,118,50,0.86)");
+  ell(ctx, cx - r*0.35, cy - r*0.02, r*0.13, r*0.16, "rgba(255,255,255,0.35)");
+}
+function drawJelly(ctx, cx, cy, r, info) {
+  ell(ctx, cx, cy + r*0.775, r*0.92, r*0.175, "rgba(216,200,226,0.78)");
+  rr(ctx, cx - r*0.84, cy - r*0.72, r*1.68, r*1.52, r*0.30);
+  ctx.fillStyle = rgba(info.color, 215); ctx.fill();
+  rr(ctx, cx - r*0.66, cy - r*0.54, r*1.20, r*0.84, r*0.24);
+  ctx.fillStyle = rgba(info.accent, 120); ctx.fill();
+  const grapes = [[-0.35,0.20],[0.0,-0.05],[0.35,0.22],[-0.15,0.45],[0.20,0.48]];
+  for (const [ox, oy] of grapes)
+    ell(ctx, cx + ox*r, cy + oy*r, r*0.16, r*0.16, "rgba(140,84,176,0.86)");
+  ell(ctx, cx - r*0.30, cy - r*0.45, r*0.18, r*0.13, "rgba(255,255,255,0.67)");
+}
+
+// ==================== 茶匙 ====================
+function drawSpoon(ctx, cx, cy, size, dessert, lit) {
+  const headRx = size*0.52, headRy = size*0.68;
+  const headCy = cy - size*0.42;
+  const handleW = size*0.20;
+  const handleTop = headCy, handleBottom = cy + size*0.92;
+
+  let headFill, headEdge, handleFill, handleEdge;
+  if (lit) {
+    headFill = rgba(dessert.color);
+    headEdge = rgba(dessert.color.map(c => Math.max(0, c - 55)));
+    handleFill = "rgb(240,236,230)"; handleEdge = "rgb(190,182,172)";
+  } else {
+    headFill = "rgb(218,212,206)"; headEdge = "rgb(172,166,160)";
+    handleFill = "rgb(218,212,206)"; handleEdge = "rgb(172,166,160)";
+  }
+  rr(ctx, cx - handleW/2, handleTop, handleW, handleBottom - handleTop, handleW/2);
+  ctx.fillStyle = handleFill; ctx.fill();
+  ctx.strokeStyle = handleEdge; ctx.lineWidth = 1; ctx.stroke();
+  ell(ctx, cx, headCy, headRx, headRy, headFill, headEdge, 1);
+
+  if (lit) {
+    drawSpoonPattern(ctx, cx, headCy, headRx, dessert);
+    ell(ctx, cx - headRx*0.37, headCy - headRy*0.41,
+        headRx*0.25, headRy*0.21, "rgba(255,255,255,0.71)");
+  }
+}
+function drawSpoonPattern(ctx, cx, cy, r, dessert) {
+  const col = "rgba(255,255,255,0.92)";
+  switch (dessert.kind) {
+    case "cake":
+      poly(ctx, [[cx, cy-r*0.55],[cx+r*0.55, cy+r*0.40],[cx-r*0.55, cy+r*0.40]], col);
+      break;
+    case "donut":
+      ell(ctx, cx, cy, r*0.55, r*0.55, null, col, 1.5);
+      break;
+    case "macaron":
+      ell(ctx, cx, cy, r*0.62, r*0.28, col);
+      break;
+    case "icecream":
+      drawStarShape(ctx, cx, cy, r*0.62, col);
+      break;
+    case "pudding":
+      poly(ctx, [[cx-r*0.45, cy-r*0.40],[cx+r*0.45, cy-r*0.40],
+                 [cx+r*0.58, cy+r*0.42],[cx-r*0.58, cy+r*0.42]], col);
+      break;
+    default:
+      poly(ctx, [[cx, cy-r*0.60],[cx+r*0.52, cy],[cx, cy+r*0.60],[cx-r*0.52, cy]], col);
+  }
+}
+
+// ==================== 花园蛇花朵 ====================
+function drawFlower(ctx, cx, cy, variantIdx) {
+  const v = FLOWER_VARIANTS[variantIdx % FLOWER_VARIANTS.length];
+  switch (v.name) {
+    case "rose": return drawFlowerRose(ctx, cx, cy, FOOD_RADIUS, v);
+    case "sakura": return drawFlowerSakura(ctx, cx, cy, FOOD_RADIUS, v);
+    case "peach": return drawFlowerPeach(ctx, cx, cy, FOOD_RADIUS, v);
+    case "chinese_rose": return drawFlowerChineseRose(ctx, cx, cy, FOOD_RADIUS, v);
+    case "lily": return drawFlowerLily(ctx, cx, cy, FOOD_RADIUS, v);
+    default: return drawFlowerDaisy(ctx, cx, cy, FOOD_RADIUS, v);
+  }
+}
+function drawFlowerRose(ctx, cx, cy, r, v) {
+  for (let i = 0; i < 5; i++) {
+    const ang = i * 2*Math.PI/5 + 0.2;
+    ell(ctx, cx + Math.cos(ang)*r*0.62, cy + Math.sin(ang)*r*0.62,
+        r*0.58, r*0.58, rgba(v.petal2));
+  }
+  for (let i = 0; i < 4; i++) {
+    const ang = i * 2*Math.PI/4 + 0.5;
+    ell(ctx, cx + Math.cos(ang)*r*0.40, cy + Math.sin(ang)*r*0.40,
+        r*0.48, r*0.48, rgba(v.petal));
+  }
+  ell(ctx, cx, cy, r*0.32, r*0.32, rgba(v.petal));
+  ell(ctx, cx, cy, r*0.15, r*0.15, rgba(v.center));
+}
+function drawFlowerSakura(ctx, cx, cy, r, v) {
+  for (let i = 0; i < 5; i++) {
+    const ang = i * 2*Math.PI/5 - Math.PI/2;
+    const px = cx + Math.cos(ang)*r*0.52, py = cy + Math.sin(ang)*r*0.52;
+    ell(ctx, px, py, r*0.56, r*0.56, rgba(v.petal));
+    const tipX = cx + Math.cos(ang)*r*1.05, tipY = cy + Math.sin(ang)*r*1.05;
+    const perpX = -Math.sin(ang), perpY = Math.cos(ang);
+    poly(ctx, [
+      [tipX + perpX*r*0.16, tipY + perpY*r*0.16],
+      [tipX - perpX*r*0.16, tipY - perpY*r*0.16],
+      [tipX - Math.cos(ang)*r*0.22, tipY - Math.sin(ang)*r*0.22],
+    ], "rgb(252,245,250)");
+  }
+  ell(ctx, cx, cy, r*0.28, r*0.28, rgba(v.center));
+  for (let i = 0; i < 5; i++) {
+    const ang = i * 2*Math.PI/5;
+    ell(ctx, cx + Math.cos(ang)*r*0.16, cy + Math.sin(ang)*r*0.16,
+        r*0.055, r*0.055, "rgb(255,170,195)");
+  }
+}
+function drawFlowerPeach(ctx, cx, cy, r, v) {
+  for (let i = 0; i < 5; i++) {
+    const ang = i * 2*Math.PI/5 - Math.PI/2;
+    ell(ctx, cx + Math.cos(ang)*r*0.50, cy + Math.sin(ang)*r*0.50,
+        r*0.55, r*0.55, rgba(v.petal));
+  }
+  ell(ctx, cx, cy, r*0.32, r*0.32, rgba(v.petal2));
+  for (let i = 0; i < 6; i++) {
+    const ang = i * 2*Math.PI/6 + 0.3;
+    ell(ctx, cx + Math.cos(ang)*r*0.22, cy + Math.sin(ang)*r*0.22,
+        r*0.075, r*0.075, "rgb(255,218,150)");
+  }
+}
+function drawFlowerChineseRose(ctx, cx, cy, r, v) {
+  for (let i = 0; i < 6; i++) {
+    const ang = i * 2*Math.PI/6;
+    ell(ctx, cx + Math.cos(ang)*r*0.66, cy + Math.sin(ang)*r*0.66,
+        r*0.50, r*0.50, rgba(v.petal2));
+  }
+  for (let i = 0; i < 5; i++) {
+    const ang = i * 2*Math.PI/5 + 0.3;
+    ell(ctx, cx + Math.cos(ang)*r*0.44, cy + Math.sin(ang)*r*0.44,
+        r*0.44, r*0.44, rgba(v.petal));
+  }
+  for (let i = 0; i < 4; i++) {
+    const ang = i * 2*Math.PI/4 + 0.6;
+    ell(ctx, cx + Math.cos(ang)*r*0.26, cy + Math.sin(ang)*r*0.26,
+        r*0.34, r*0.34, rgba(v.petal));
+  }
+  ell(ctx, cx, cy, r*0.17, r*0.17, rgba(v.center));
+}
+function drawFlowerLily(ctx, cx, cy, r, v) {
+  for (let i = 0; i < 6; i++) {
+    const ang = i * 2*Math.PI/6 - Math.PI/2;
+    const tipX = cx + Math.cos(ang)*r*1.05, tipY = cy + Math.sin(ang)*r*1.05;
+    const perpX = -Math.sin(ang)*r*0.30, perpY = Math.cos(ang)*r*0.30;
+    const baseX = cx + Math.cos(ang)*r*0.14, baseY = cy + Math.sin(ang)*r*0.14;
+    poly(ctx, [
+      [baseX + perpX, baseY + perpY], [tipX, tipY], [baseX - perpX, baseY - perpY],
+    ], rgba(v.petal));
+  }
+  ell(ctx, cx, cy, r*0.26, r*0.26, rgba(v.center));
+  for (let i = 0; i < 5; i++) {
+    const ang = i * 2*Math.PI/5 + 0.4;
+    const ex = cx + Math.cos(ang)*r*0.55, ey = cy + Math.sin(ang)*r*0.55;
+    line(ctx, cx, cy, ex, ey, "rgb(200,160,90)", 1);
+    ell(ctx, ex, ey, r*0.06, r*0.06, "rgb(160,110,50)");
+  }
+}
+function drawFlowerDaisy(ctx, cx, cy, r, v) {
+  const n = 12;
+  for (let i = 0; i < n; i++) {
+    const ang = i * 2*Math.PI/n;
+    const tipX = cx + Math.cos(ang)*r*1.08, tipY = cy + Math.sin(ang)*r*1.08;
+    const baseX = cx + Math.cos(ang)*r*0.14, baseY = cy + Math.sin(ang)*r*0.14;
+    const perpX = -Math.sin(ang)*r*0.13, perpY = Math.cos(ang)*r*0.13;
+    poly(ctx, [
+      [baseX + perpX, baseY + perpY],
+      [tipX + perpX*0.4, tipY + perpY*0.4],
+      [tipX, tipY],
+      [tipX - perpX*0.4, tipY - perpY*0.4],
+      [baseX - perpX, baseY - perpY],
+    ], rgba(v.petal));
+  }
+  ell(ctx, cx, cy, r*0.36, r*0.36, rgba(v.center));
+  for (let i = 0; i < 5; i++) {
+    const ang = i * 2*Math.PI/5 + 0.3;
+    ell(ctx, cx + Math.cos(ang)*r*0.16, cy + Math.sin(ang)*r*0.16,
+        r*0.05, r*0.05, "rgb(220,160,40)");
+  }
+}
+function drawGrassBundle(ctx, cx, cy) {
+  const r = FOOD_RADIUS;
+  const baseX = cx, baseY = cy + r*0.75;
+  const leaves = [
+    [-0.75,-1.55,0.18,[96,195,165]],
+    [-0.38,-1.95,0.16,[110,215,180]],
+    [-0.05,-2.10,0.18,[120,225,190]],
+    [0.30,-1.85,0.16,[110,215,180]],
+    [0.68,-1.50,0.18,[96,195,165]],
+  ];
+  for (const [dx, dy, w, col] of leaves) {
+    const tipX = baseX + dx*r, tipY = baseY + dy*r;
+    const midX = baseX + dx*r*0.35, midY = baseY + dy*r*0.55;
+    const bw = r * w;
+    const left = [], right = [];
+    const nSeg = 10;
+    for (let k = 0; k <= nSeg; k++) {
+      const t = k / nSeg;
+      const bx = (1-t)*(1-t)*baseX + 2*(1-t)*t*midX + t*t*tipX;
+      const by = (1-t)*(1-t)*baseY + 2*(1-t)*t*midY + t*t*tipY;
+      const wt = bw * Math.pow(1-t, 0.6);
+      const tx = 2*(1-t)*(midX-baseX) + 2*t*(tipX-midX);
+      const ty = 2*(1-t)*(midY-baseY) + 2*t*(tipY-midY);
+      const L = Math.hypot(tx, ty) || 1;
+      const nx = -ty/L, ny = tx/L;
+      left.push([bx - nx*wt, by - ny*wt]);
+      right.push([bx + nx*wt, by + ny*wt]);
+    }
+    poly(ctx, left.concat(right.reverse()), rgba(col));
+  }
+  ell(ctx, baseX, baseY + r*0.02, r*0.32, r*0.20, "rgb(140,205,175)");
+}
+function drawStarFood(ctx, cx, cy) {
+  const r = FOOD_RADIUS;
+  for (let k = 5; k > 0; k--) {
+    const t = k / 5;
+    const a = Math.round(48 * Math.pow(1 - t, 1.8));
+    if (a <= 0) continue;
+    drawStarShape(ctx, cx, cy, r*(1.22 + 0.78*t), rgba([255,210,120], a));
+  }
+  drawStarShape(ctx, cx, cy, r*1.16, "rgb(220,145,35)");
+  drawStarShape(ctx, cx, cy, r*1.02, "rgb(255,195,70)");
+  drawStarShape(ctx, cx, cy, r*0.68, "rgb(255,236,160)");
+  drawStarShape(ctx, cx, cy, r*0.36, "rgb(255,255,248)");
+}
+
+// ---------- 粒子 ----------
+function drawPetalShape(ctx, cx, cy, size, rot, color) {
+  const n = 14;
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = i/n * 2*Math.PI;
+    const px = Math.cos(a)*size, py = Math.sin(a)*size*0.55;
+    pts.push([cx + px*Math.cos(rot) - py*Math.sin(rot),
+              cy + px*Math.sin(rot) + py*Math.cos(rot)]);
+  }
+  poly(ctx, pts, color);
+}
+function drawParticles() {
+  for (const p of game.particles) {
+    const t = Math.max(0, Math.min(1, p.life / p.maxLife));
+    if (p.type === "note") {
+      drawNote(ctx, p.x, p.y, p.kind, rgba([30,30,35], Math.round(255*t)), FOOD_RADIUS*p.size);
+    } else if (p.type === "petal") {
+      drawPetalShape(ctx, p.x, p.y, p.size, p.rot, rgba(p.color, Math.round(240*t)));
+    } else if (p.type === "star") {
+      for (let k = 5; k > 0; k--) {
+        const a = Math.round(90 * (1 - k/5) * t);
+        if (a <= 0) continue;
+        drawStarShape(ctx, p.x, p.y, p.size*(1 + k*0.4), rgba([255,240,180], a), p.rot);
+      }
+      drawStarShape(ctx, p.x, p.y, p.size, rgba(p.color, Math.round(255*t)), p.rot);
+    } else if (p.type === "sprinkle") {
+      drawSprinkleShape(ctx, p.x, p.y, p.size, p.rot, rgba(p.color, Math.round(255*t)));
+    }
+  }
+}
+
+// ---------- HUD ----------
+function drawHud() {
+  const art = THEME_ART[game.themeName];
+  const hintCol = art.hint;
+  const panel = rgba(art.hud_bg);
+  const outl = rgba(art.hud_outline);
+
+  const box = [MARGIN+14, MARGIN+14, MARGIN+200, MARGIN+92];
+  rr(ctx, box[0], box[1], box[2]-box[0], box[3]-box[1], 14);
+  ctx.fillStyle = panel; ctx.fill();
+  ctx.strokeStyle = outl; ctx.lineWidth = 1; ctx.stroke();
+  ctx.textAlign = "left"; ctx.textBaseline = "top";
+  ctx.fillStyle = hintCol;
+  ctx.font = fnt(14);
+  ctx.fillText("得分", box[0]+22, box[1]+14);
+  ctx.font = fnt(34, true);
+  ctx.fillText(String(game.score), box[0]+22, box[1]+34);
+
+  if (game.themeName === "星星蛇") {
+    const progress = game.constellationPoints.length;
+    const totalDone = game.constellations.length;
+    const b2 = [MARGIN+14, MARGIN+100, MARGIN+200, MARGIN+154];
+    rr(ctx, b2[0], b2[1], b2[2]-b2[0], b2[3]-b2[1], 14);
+    ctx.fillStyle = panel; ctx.fill();
+    ctx.strokeStyle = outl; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = hintCol;
+    ctx.font = fnt(12);
+    ctx.fillText("星座进度", b2[0]+22, b2[1]+10);
+    ctx.font = fnt(16, true);
+    ctx.fillText(`${progress}/${CONSTELLATION_SIZE}    已完成 ${totalDone}`, b2[0]+22, b2[1]+28);
+  }
+  if (game.themeName === "甜品蛇") {
+    const b2 = [MARGIN+14, MARGIN+100, MARGIN+14+264, MARGIN+100+76];
+    rr(ctx, b2[0], b2[1], b2[2]-b2[0], b2[3]-b2[1], 14);
+    ctx.fillStyle = panel; ctx.fill();
+    ctx.strokeStyle = outl; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = hintCol;
+    ctx.font = fnt(12);
+    ctx.fillText("甜品茶匙", b2[0]+18, b2[1]+8);
+    const spoonY = b2[1] + 50;
+    const sx = b2[0] + 30;
+    for (let i = 0; i < DESSERTS.length; i++)
+      drawSpoon(ctx, sx + i*40, spoonY, 16, DESSERTS[i], game.spoonsLit[i]);
+  }
+
+  const btnW = 130;
+  const bx1 = W - MARGIN - 14, bx0 = bx1 - btnW;
+  let y0 = MARGIN + 14, y1 = y0 + 40;
+  rr(ctx, bx0, y0, btnW, y1-y0, 12);
+  ctx.fillStyle = panel; ctx.fill();
+  ctx.strokeStyle = outl; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = hintCol;
+  ctx.font = fnt(16, true);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(game.themeName, (bx0+bx1)/2, (y0+y1)/2);
+
+  y0 = MARGIN + 62; y1 = y0 + 38;
+  game.restartBtn = [bx0, y0, bx1, y1];
+  drawHudButton(bx0, y0, bx1, y1, "重 新 开 始 (R)", "restart", 14);
+  y0 = MARGIN + 108; y1 = y0 + 38;
+  game.quitBtn = [bx0, y0, bx1, y1];
+  drawHudButton(bx0, y0, bx1, y1, "返 回 首 页", "quit", 14);
+
+  const status = game.followMouse ? "鼠标跟随中" : "方向键 / WASD 控制";
+  const hintY = H - MARGIN - 22;
+  const panelW = 880;
+  const px0 = (W - panelW) / 2;
+  rr(ctx, px0, hintY-14, panelW, 30, 12);
+  ctx.fillStyle = panel; ctx.fill();
+  ctx.strokeStyle = outl; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = hintCol;
+  ctx.font = fnt(14, true);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(status, W/2 - 250, hintY);
+  const hint2 = game.themeName === "甜品蛇"
+    ? "点击跟随  ·  空格暂停  ·  R重开  ·  吃甜品点亮茶匙  ·  ESC返回首页"
+    : "点击跟随  ·  空格暂停  ·  R重开  ·  ESC返回首页";
+  ctx.font = fnt(13);
+  ctx.fillText(hint2, W/2 + 130, hintY);
+}
+
+// ==================== 主循环 ====================
+let lastT = performance.now();
+function tick(now) {
+  let dt = (now - lastT) / 1000;
+  lastT = now;
+  if (dt > 0.06) dt = 0.06;
+  if (dt < 0) dt = 0;
+  update(dt);
+  render();
+  requestAnimationFrame(tick);
+}
+
+// ---------- 自适应缩放 ----------
+function fit() {
+  const s = Math.min(window.innerWidth / (W + 8), window.innerHeight / (H + 8));
+  canvas.style.width = (W * s) + "px";
+  canvas.style.height = (H * s) + "px";
+}
+window.addEventListener("resize", fit);
+fit();
+
+newSnake();
+getBg(game.themeName);
+window.game = game;
+canvas.focus();
+window.addEventListener("load", () => canvas.focus());
+requestAnimationFrame((t) => { lastT = t; requestAnimationFrame(tick); });
+</script>
+</body>
+</html>
