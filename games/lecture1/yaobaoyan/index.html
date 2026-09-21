@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>贪吃蛇 · by 姚宝妍</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0b1116;
+    font-family: "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  }
+  #wrap {
+    transform-origin: center center;
+  }
+  #info {
+    background: #101820;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    text-align: center;
+    padding: 8px 0;
+    width: 600px;
+    position: relative;
+  }
+  #info .by {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 11px;
+    font-weight: 400;
+    color: rgba(255,255,255,.45);
+  }
+  canvas {
+    display: block;
+    background: #101820;
+    outline: none;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="info">得分：0　　方向键/WASD移动　　空格/P暂停　　R重开<span class="by">by 姚宝妍</span></div>
+  <canvas id="c" width="600" height="440" tabindex="0"></canvas>
+</div>
+<script>
+"use strict";
+const CELL = 20, COLS = 30, ROWS = 22, SPEED = 110;
+const W = COLS * CELL, H = ROWS * CELL;
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const info = document.getElementById("info");
+
+let snake, direction, nextDirection, score, paused, gameOver, food, timer = null;
+
+function restart() {
+  if (timer !== null) { clearTimeout(timer); timer = null; }
+  const mx = COLS >> 1, my = ROWS >> 1;
+  snake = [[mx, my], [mx - 1, my], [mx - 2, my]];
+  direction = [1, 0];
+  nextDirection = [1, 0];
+  score = 0;
+  paused = false;
+  gameOver = false;
+  food = makeFood();
+  draw();
+  schedule();
+}
+
+function makeFood() {
+  const empty = [];
+  for (let x = 0; x < COLS; x++)
+    for (let y = 0; y < ROWS; y++)
+      if (!snake.some(([sx, sy]) => sx === x && sy === y)) empty.push([x, y]);
+  return empty.length ? empty[(Math.random() * empty.length) | 0] : null;
+}
+
+function schedule() {
+  if (timer === null && !paused && !gameOver) timer = setTimeout(move, SPEED);
+}
+
+function move() {
+  timer = null;
+  if (paused || gameOver) return;
+  direction = nextDirection;
+  const [hx, hy] = snake[0];
+  const nh = [hx + direction[0], hy + direction[1]];
+  const eating = food !== null && nh[0] === food[0] && nh[1] === food[1];
+
+  const hitWall = nh[0] < 0 || nh[0] >= COLS || nh[1] < 0 || nh[1] >= ROWS;
+  const bodyToCheck = eating ? snake : snake.slice(0, -1);
+  const hitBody = bodyToCheck.some(([x, y]) => x === nh[0] && y === nh[1]);
+
+  if (hitWall || hitBody) { gameOver = true; draw(); return; }
+
+  snake.unshift(nh);
+  if (eating) {
+    score += 10;
+    food = makeFood();
+    if (food === null) gameOver = true;
+  } else {
+    snake.pop();
+  }
+  draw();
+  schedule();
+}
+
+function drawCell([x, y], color, oval) {
+  const m = oval ? 3 : 1;
+  ctx.fillStyle = color;
+  if (oval) {
+    ctx.beginPath();
+    ctx.ellipse(x * CELL + CELL / 2, y * CELL + CELL / 2, CELL / 2 - m, CELL / 2 - m, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.fillRect(x * CELL + m, y * CELL + m, CELL - 2 * m, CELL - 2 * m);
+  }
+}
+
+function drawMessage(title, subtitle) {
+  ctx.fillStyle = "black";
+  ctx.fillRect(0, H / 2 - 60, W, 120);
+  ctx.fillStyle = "white";
+  ctx.textAlign = "center";
+  ctx.font = "700 24px 'PingFang SC','Microsoft YaHei UI',sans-serif";
+  ctx.fillText(title, W / 2, H / 2 - 18 + 8);
+  ctx.font = "13px 'PingFang SC','Microsoft YaHei UI',sans-serif";
+  ctx.fillText(subtitle, W / 2, H / 2 + 25 + 5);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  info.firstChild.textContent =
+    `得分：${score}　　方向键/WASD移动　　空格/P暂停　　R重开`;
+  if (food !== null) drawCell(food, "#ff5252", true);
+  snake.forEach((part, i) => drawCell(part, i === 0 ? "#76d275" : "#43a047", false));
+  if (gameOver) {
+    drawMessage(food === null ? "恭喜通关！" : "游戏结束", "按 R 重新开始");
+  } else if (paused) {
+    drawMessage("游戏暂停", "按空格或 P 继续");
+  }
+}
+
+const KEY_DIRS = {
+  ArrowUp: [0, -1], w: [0, -1], W: [0, -1],
+  ArrowDown: [0, 1], s: [0, 1], S: [0, 1],
+  ArrowLeft: [-1, 0], a: [-1, 0], A: [-1, 0],
+  ArrowRight: [1, 0], d: [1, 0], D: [1, 0]
+};
+
+addEventListener("keydown", (e) => {
+  const k = e.key;
+  if (k === " " || k.startsWith("Arrow")) e.preventDefault();
+
+  if (k === "r" || k === "R") { restart(); return; }
+  if ((k === " " || k === "p" || k === "P") && !gameOver) {
+    paused = !paused;
+    draw();
+    if (!paused) schedule();
+    return;
+  }
+  if (paused || gameOver) return;
+
+  const wanted = KEY_DIRS[k];
+  if (!wanted) return;
+  const opposite = [-direction[0], -direction[1]];
+  if (wanted[0] !== opposite[0] || wanted[1] !== opposite[1]) nextDirection = wanted;
+});
+
+function fit() {
+  const scale = Math.min(innerWidth / W, innerHeight / (H + 34), 1.4);
+  document.getElementById("wrap").style.transform = `scale(${scale})`;
+}
+addEventListener("resize", fit);
+fit();
+canvas.focus();
+canvas.addEventListener("click", () => canvas.focus());
+restart();
+</script>
+</body>
+</html>

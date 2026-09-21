@@ -25,7 +25,7 @@
         { "id": "l1-yejiayu", "author": "叶佳瑜", "title": "花园贪吃蛇", "tags": ["Emoji素材", "三档难度", "小草障碍"], "path": "games/lecture1/yejiayu/" },
         { "id": "l1-zhangxunyin", "author": "张熏尹", "title": "像素猫贪吃蛇", "tags": ["像素风", "HTML原生", "石头障碍"], "path": "games/lecture1/zhangxunyin/" },
         { "id": "l1-zhaofangxuan", "author": "赵芳萱", "title": "贪吃蛇 · 主题版", "tags": ["连续物理", "鼠标跟随", "四主题切换", "星座连线"], "path": "games/lecture1/zhaofangxuan/" },
-        { "id": "l1-yaobaoyan", "author": "姚宝妍", "title": "作业提交中", "placeholder": true }
+        { "id": "l1-yaobaoyan", "author": "姚宝妍", "title": "贪吃蛇", "tags": ["深色简约", "经典玩法", "通关判定"], "path": "games/lecture1/yaobaoyan/" }
       ]
     },
     { "id": 2, "title": "第二讲", "active": false, "games": [] },
